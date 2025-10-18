@@ -1,0 +1,18 @@
+import React from 'react';
+import { View, Text, Button, StyleSheet } from 'react-native';
+
+type Props = { user: any; onLogout: () => void };
+
+export default function OwnerScreen({ user, onLogout }: Props) {
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Owner Dashboard</Text>
+      <Text>Your flats and agreements.</Text>
+      <View style={{ marginTop: 20 }}>
+        <Button title="Logout" onPress={onLogout} />
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({ container: { flex: 1, padding: 24 }, title: { fontSize: 22, fontWeight: '700' } });
