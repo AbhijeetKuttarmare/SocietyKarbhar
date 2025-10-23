@@ -1,6 +1,9 @@
-import React, { useState, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, KeyboardAvoidingView, Platform, Image, ImageBackground } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, Image, ImageBackground, Animated, Easing, ActivityIndicator, Dimensions } from 'react-native';
 import api, { setToken, setAuthHeader } from '../services/api';
+import { LinearGradient } from 'expo-linear-gradient';
+
+const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
 
 type Props = { onLogin: (user: any) => void };
 
@@ -10,20 +13,75 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
   const [otp, setOtp] = useState(['', '', '', '', '', '']); // 6-digit OTP
   const inputRefs = useRef<TextInput[]>([]);
   const [loading, setLoading] = useState(false);
+  const [phoneError, setPhoneError] = useState('');
+  const [otpError, setOtpError] = useState('');
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarText, setSnackbarText] = useState('');
+  const [snackbarType, setSnackbarType] = useState<'success'|'error'|'info'>('info');
+  const [resendTimer, setResendTimer] = useState(0);
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+
+  const fadeAnim = useRef(new Animated.Value(0)).current; // for transition between send/verify
+  const screenWidth = Dimensions.get('window').width;
+
+  useEffect(()=>{
+    // animate when otpSent toggles
+    Animated.timing(fadeAnim, { toValue: otpSent ? 1 : 0, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [otpSent]);
+
+  // logo entrance animation
+  const logoAnim = useRef(new Animated.Value(0)).current;
+  useEffect(()=>{
+    Animated.spring(logoAnim, { toValue: 1, friction: 6, tension: 80, useNativeDriver: true }).start();
+  }, []);
+
+  // phone input focus/floating label animation
+  const phoneFocusAnim = useRef(new Animated.Value(phone ? 1 : 0)).current;
+  const [phoneFocused, setPhoneFocused] = useState(false);
+  useEffect(()=>{
+    Animated.timing(phoneFocusAnim, { toValue: (phoneFocused || !!phone) ? 1 : 0, duration: 220, useNativeDriver: true, easing: Easing.out(Easing.cubic) }).start();
+  }, [phoneFocused, phone]);
+
+  useEffect(()=>{
+    let t: any;
+    if(resendTimer > 0){
+      t = setTimeout(()=> setResendTimer(s=>s-1), 1000);
+    }
+    return ()=> clearTimeout(t);
+  }, [resendTimer]);
 
   const handleSendOtp = async () => {
+    setPhoneError('');
+    setOtpError('');
     if (!/^\d{10}$/.test(phone)) {
-      Alert.alert('Error', 'Please enter a valid 10-digit mobile number');
+      setPhoneError('❌ Please enter a valid 10-digit mobile number');
       return;
     }
 
     setLoading(true);
     try {
-      await api.post('/api/auth/otp/request', { phone }); // Send only 10-digit number
+      const res = await api.post('/api/auth/otp/request', { phone }); // Send only 10-digit number
+      // API may return 401 or 403 with details; handle those inline
       setOtpSent(true);
-      Alert.alert('Success', 'OTP sent. Please check your phone.');
+      setResendTimer(20);
+      setSnackbarType('success');
+      setSnackbarText('OTP sent. Check your phone.');
+      setSnackbarVisible(true);
+      // hide snackbar automatically
+      setTimeout(()=>setSnackbarVisible(false), 3000);
     } catch (err: any) {
-      Alert.alert('Error', 'Failed to send OTP. Please check the number.');
+      const data = err && err.response && err.response.data;
+      if(data && data.error === 'phone not registered'){
+        setPhoneError('❌ This mobile number is not registered.');
+      }else if(data && data.error === 'account deactivated'){
+        setPhoneError('⚠️ Your account is deactivated. Please contact support.');
+      }else{
+        setPhoneError('❌ Failed to send OTP. Please try again later.');
+      }
+      setSnackbarType('error');
+      setSnackbarText('Failed to send OTP');
+      setSnackbarVisible(true);
+      setTimeout(()=>setSnackbarVisible(false), 3500);
     } finally {
       setLoading(false);
     }
@@ -32,20 +90,33 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
   const handleVerifyOtp = async () => {
     const otpCode = otp.join('');
     if (otpCode.length !== 6) {
-      Alert.alert('Error', 'Please enter the 6-digit OTP.');
+      setOtpError('❌ Please enter the 6-digit OTP.');
       return;
     }
 
     setLoading(true);
     try {
       const res = await api.post('/api/auth/otp/verify', { phone, code: otpCode }); // Only 10-digit number
-  const { token, user } = res.data;
-  await setToken(token);
-    // ensure axios in-memory header is set immediately for subsequent requests
-    try{ setAuthHeader(token); }catch(e){}
-  onLogin({ ...user, token });
+      const { token, user } = res.data;
+      await setToken(token);
+      // ensure axios in-memory header is set immediately for subsequent requests
+      try{ setAuthHeader(token); }catch(e){}
+      onLogin({ ...user, token });
     } catch (err: any) {
-      Alert.alert('Error', 'Incorrect OTP. Please try again.');
+      const data = err && err.response && err.response.data;
+      if(data && data.error === 'invalid code'){
+        setOtpError('❌ Incorrect OTP. Please try again.');
+      }else if(data && data.error === 'code expired'){
+        setOtpError('❌ OTP expired. Request a new one.');
+      }else if(data && data.error === 'account deactivated'){
+        setPhoneError('⚠️ Your account is deactivated. Please contact support.');
+      }else{
+        setOtpError('❌ Incorrect OTP. Please try again.');
+      }
+      setSnackbarType('error');
+      setSnackbarText('OTP verification failed');
+      setSnackbarVisible(true);
+      setTimeout(()=>setSnackbarVisible(false), 3000);
     } finally {
       setLoading(false);
     }
@@ -65,128 +136,156 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
     }
   };
 
-  return (
-    <ImageBackground
-      source={{ uri: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=800&q=80' }}
-      style={styles.background}
-      resizeMode="cover"
-    >
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.container}>
-        <View style={styles.card}>
-          <Image
-            source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/1/12/Real_estate_logo.png' }}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-          <Text style={styles.title}>Society Karbhar</Text>
+  // Animated interpolations
+  const slideX = fadeAnim.interpolate({ inputRange: [0,1], outputRange: [screenWidth, 0] });
 
-          {!otpSent ? (
-            <>
-              <View style={styles.phoneContainer}>
-                <View style={styles.countryCode}>
-                  <Image
-                    source={{ uri: 'https://upload.wikimedia.org/wikipedia/en/4/41/Flag_of_India.svg' }}
-                    style={styles.flag}
-                  />
-                  <Text style={styles.countryText}>+91</Text>
+  return (
+    <View style={styles.flexFill}>
+      <AnimatedLinearGradient
+        colors={[ '#6D28D9', '#0ea5a0' ]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradientFull}
+      />
+
+      {/* Decorative blurred blobs */}
+      <Animated.View style={[styles.blob, styles.blob1]} />
+      <Animated.View style={[styles.blob, styles.blob2]} />
+
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.container}>
+        <Animated.View style={[styles.card, { transform: [{ translateX: fadeAnim.interpolate({ inputRange:[0,1], outputRange:[0,-40] }) }] }] }>
+          <Animated.Image
+            source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/1/12/Real_estate_logo.png' }}
+            style={[styles.logo, { transform: [{ scale: logoAnim }, { rotate: logoAnim.interpolate({ inputRange:[0,1], outputRange:['0deg','6deg'] }) }] }]}
+            resizeMode="cover"
+          />
+          <Animated.Text style={[styles.title, { opacity: fadeAnim.interpolate({ inputRange:[0,1], outputRange:[1,0.9] }) }]}>Society Karbhar</Animated.Text>
+
+          {/* Phone input / Send OTP panel */}
+          <Animated.View style={[styles.panel, { opacity: fadeAnim.interpolate({ inputRange:[0,1], outputRange:[1,0] }) }] } pointerEvents={otpSent ? 'none' : 'auto'}>
+            <View style={styles.floatingLabelContainer}>
+              {/* <Animated.Text style={[styles.floatingLabel, { transform: [{ translateY: phoneFocusAnim.interpolate({ inputRange:[0,1], outputRange: [0,-18] }) }, { scale: phoneFocusAnim.interpolate({ inputRange:[0,1], outputRange: [1,0.85] }) }], opacity: phoneFocusAnim } ]}>Mobile Number</Animated.Text> */}
+              <View style={styles.phoneRow}>
+                <View style={styles.countryCodeSmall}>
+                  <Image source={{ uri: 'https://upload.wikimedia.org/wikipedia/en/4/41/Flag_of_India.svg' }} style={styles.flagSmall} />
+                  <Text style={styles.countryTextSmall}>+91</Text>
                 </View>
                 <TextInput
-                  style={styles.input}
-                  placeholder="Enter Mobile Number"
+                  style={[styles.inputModern, phoneError ? styles.inputError : {}]}
+                  placeholder="Enter mobile number"
+                  placeholderTextColor="rgba(0,0,0,0.3)"
                   keyboardType="phone-pad"
                   value={phone}
-                  onChangeText={setPhone}
-                  placeholderTextColor="#999"
+                  onChangeText={(v)=>{ setPhone(v.replace(/\D/g,'')); setPhoneError(''); }}
                   maxLength={10}
+                  onFocus={()=>setPhoneFocused(true)}
+                  onBlur={()=>setPhoneFocused(false)}
                 />
               </View>
-              <TouchableOpacity style={styles.primaryButton} onPress={handleSendOtp} disabled={loading}>
-                <Text style={styles.buttonText}>{loading ? 'Sending...' : 'Send OTP'}</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <Text style={styles.otpTitle}>Enter OTP</Text>
-              <View style={styles.otpContainer}>
-                {otp.map((digit, index) => (
+            </View>
+            {phoneError ? <Text style={styles.inlineError}>{phoneError}</Text> : <View style={{height:16}} />}
+
+            <TouchableOpacity style={[styles.primaryButton, loading ? styles.buttonDisabled : {}]} onPress={handleSendOtp} disabled={loading} activeOpacity={0.85}>
+              <LinearGradient colors={['#7c3aed','#06b6d4']} start={{x:0,y:0}} end={{x:1,y:0}} style={styles.buttonGradient}>
+                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Send OTP</Text>}
+              </LinearGradient>
+            </TouchableOpacity>
+          </Animated.View>
+
+          {/* OTP panel */}
+          <Animated.View style={[styles.panel, { position: 'absolute', left:0, right:0, top: '36%', transform: [{ translateX: slideX }], opacity: fadeAnim }]} pointerEvents={otpSent ? 'auto' : 'none'}>
+            <Text style={styles.otpTitle}>Enter the 6-digit code</Text>
+            <View style={styles.otpContainerModern}>
+              {otp.map((digit, index) => {
+                const isFocused = focusedIndex === index;
+                return (
                   <TextInput
                     key={index}
                     ref={(ref) => (inputRefs.current[index] = ref!)}
-                    style={styles.otpInput}
+                    style={[styles.otpInputModern, isFocused ? styles.otpInputFocused : {}]}
                     keyboardType="number-pad"
                     maxLength={1}
                     value={digit}
+                    onFocus={()=>setFocusedIndex(index)}
+                    onBlur={()=>setFocusedIndex(null)}
                     onChangeText={(value) => handleOtpChange(value, index)}
                   />
-                ))}
-              </View>
-              <TouchableOpacity style={styles.primaryButton} onPress={handleVerifyOtp} disabled={loading}>
-                <Text style={styles.buttonText}>{loading ? 'Verifying...' : 'Verify OTP'}</Text>
+                );
+              })}
+            </View>
+            {otpError ? <Text style={styles.inlineError}>{otpError}</Text> : <View style={{height:16}} />}
+
+            <TouchableOpacity style={[styles.primaryButton, loading ? styles.buttonDisabled : {}]} onPress={handleVerifyOtp} disabled={loading} activeOpacity={0.85}>
+              <LinearGradient colors={['#7c3aed','#06b6d4']} start={{x:0,y:0}} end={{x:1,y:0}} style={styles.buttonGradient}>
+                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Verify OTP</Text>}
+              </LinearGradient>
+            </TouchableOpacity>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 12 }}>
+              <TouchableOpacity onPress={handleSendOtp} disabled={resendTimer>0 || loading}>
+                <Text style={[styles.resendText, (resendTimer>0 || loading) ? { opacity: 0.4 } : {}]}>{resendTimer>0 ? `Resend OTP in ${resendTimer}s` : 'Resend OTP'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.resendButton} onPress={handleSendOtp}>
-                <Text style={styles.resendText}>Resend OTP</Text>
-              </TouchableOpacity>
-            </>
+            </View>
+          </Animated.View>
+
+          {/* Snackbar */}
+          {snackbarVisible && (
+            <Animated.View style={[styles.snackbar, snackbarType === 'error' ? styles.snackbarError : styles.snackbarSuccess]}>
+              <Text style={styles.snackbarText}>{snackbarText}</Text>
+            </Animated.View>
           )}
-        </View>
+        </Animated.View>
       </KeyboardAvoidingView>
-    </ImageBackground>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  background: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  container: { flex: 1, justifyContent: 'center', width: '100%' },
+  flexFill: { flex: 1, backgroundColor: 'transparent' },
+  gradientBg: { position: 'absolute', left:0, right:0, top:0, bottom:0, backgroundColor: 'linear-gradient(180deg, #5b21b6 0%, #06b6d4 100%)', opacity: 0.95 },
+  gradientFull: { position: 'absolute', left:0, right:0, top:0, bottom:0 },
+  blob: { position: 'absolute', borderRadius: 200, opacity: 0.18 },
+  blob1: { width: 320, height: 320, backgroundColor: '#ffffff', top: -80, left: -80, transform: [{ scale: 1.1 }], shadowColor: '#fff', shadowOpacity: 0.35, shadowRadius: 40 },
+  blob2: { width: 260, height: 260, backgroundColor: '#06b6d4', bottom: -60, right: -60, opacity: 0.12, shadowColor: '#06b6d4', shadowOpacity: 0.5, shadowRadius: 30 },
+  container: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 18 },
   card: {
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    marginHorizontal: 20,
-    borderRadius: 20,
-    padding: 30,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 10,
-    alignItems: 'center',
-  },
-  logo: { width: 100, height: 100, marginBottom: 16 },
-  title: { fontSize: 32, fontWeight: 'bold', color: '#4f46e5', textAlign: 'center', marginBottom: 24 },
-  phoneContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 16, width: '100%' },
-  countryCode: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 14, backgroundColor: '#f1f1f1', borderTopLeftRadius: 12, borderBottomLeftRadius: 12 },
-  flag: { width: 24, height: 16, marginRight: 6 },
-  countryText: { fontSize: 16, fontWeight: '500' },
-  input: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    backgroundColor: '#fff',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderTopRightRadius: 12,
-    borderBottomRightRadius: 12,
-    fontSize: 16,
-  },
-  primaryButton: {
-    backgroundColor: '#4f46e5',
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginBottom: 12,
     width: '100%',
+    maxWidth: 520,
+    borderRadius: 20,
+    padding: 26,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    shadowColor: '#0b1020',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    elevation: 12,
+    alignItems: 'center',
+    overflow: 'hidden'
   },
-  buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
-  otpTitle: { fontSize: 18, fontWeight: '500', marginBottom: 16 },
-  otpContainer: { flexDirection: 'row', justifyContent: 'space-between', width: '90%' },
-  otpInput: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 12,
-    width: 50,
-    height: 50,
-    textAlign: 'center',
-    fontSize: 20,
-    backgroundColor: '#f7f7f7',
-  },
-  resendButton: { marginTop: 12 },
-  resendText: { color: '#4f46e5', fontWeight: '500' },
+  logo: { width: 84, height: 84, marginBottom: 12, borderRadius: 18 },
+  title: { fontSize: 28, fontWeight: '700', color: '#0f172a', textAlign: 'center', marginBottom: 18, fontFamily: 'Inter' },
+  panel: { width: '100%', marginTop: 6 },
+  floatingLabelContainer: { marginBottom: 6 },
+  floatingLabel: { position: 'absolute', left: 16, top: 14, color: 'rgba(15,23,42,0.6)', fontSize: 16, zIndex: 10 },
+  floatingLabelSmall: { top: -10, fontSize: 12, color: '#0f172a' },
+  phoneRow: { flexDirection: 'row', alignItems: 'center' },
+  countryCodeSmall: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 12, backgroundColor: '#f3f4f6', borderTopLeftRadius: 12, borderBottomLeftRadius: 12, marginRight: 8 },
+  flagSmall: { width: 20, height: 14, marginRight: 6 },
+  countryTextSmall: { fontSize: 14, fontWeight: '600' },
+  inputModern: { flex: 1, backgroundColor: '#fff', paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, fontSize: 16, borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
+  inputError: { borderColor: '#ff4d4f' },
+  inlineError: { color: '#ff4d4f', marginTop: 8, fontSize: 13 },
+  primaryButton: { marginTop: 12, backgroundColor: 'linear-gradient(90deg,#4f46e5,#06b6d4)', borderRadius: 12, paddingVertical: 14, alignItems: 'center', width: '100%' },
+  buttonGradient: { paddingVertical: 12, paddingHorizontal: 8, width: '100%', alignItems: 'center', borderRadius: 12 },
+  buttonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  buttonDisabled: { opacity: 0.6 },
+  otpTitle: { fontSize: 16, fontWeight: '600', color: '#0f172a', textAlign: 'center', marginBottom: 12 },
+  otpContainerModern: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 12 },
+  otpInputModern: { width: 52, height: 56, borderRadius: 12, backgroundColor: '#fff', textAlign: 'center', fontSize: 20, borderWidth: 1, borderColor: 'rgba(15,23,42,0.06)' },
+  otpInputFocused: { borderColor: '#4f46e5', shadowColor: '#6c5ce7', shadowOpacity: 0.12, shadowOffset: { width:0, height:6 }, shadowRadius: 12 },
+  resendText: { color: '#475569', fontWeight: '600' },
+  snackbar: { position: 'absolute', bottom: 18, left: 18, right: 18, padding: 12, borderRadius: 10, alignItems: 'center' },
+  snackbarText: { color: '#fff', fontWeight: '600' },
+  snackbarError: { backgroundColor: '#ef4444' },
+  snackbarSuccess: { backgroundColor: '#10b981' },
 });

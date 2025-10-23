@@ -6,7 +6,8 @@ module.exports = (sequelize) => {
     id: { type: DataTypes.UUID, defaultValue: () => uuidv4(), primaryKey: true },
     societyId: { type: DataTypes.UUID },
     flat_no: { type: DataTypes.STRING },
-    ownerId: { type: DataTypes.UUID }
+    ownerId: { type: DataTypes.UUID },
+    buildingId: { type: DataTypes.UUID }
   }, { tableName: 'flats' });
 
   return Flat;

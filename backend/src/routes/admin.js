@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { User, Flat } = require('../models');
-const { Building, Helpline, Document, Agreement, SuperadminLog, Society } = require('../models');
+const { Building, Helpline, Document, Agreement, SuperadminLog, Society, Notice, NoticeRecipient } = require('../models');
 const bcrypt = require('bcrypt');
 const { authenticate, authorize } = require('../middlewares/auth');
 const cloudinary = require('cloudinary').v2;
@@ -15,7 +15,8 @@ router.use(authenticate, authorize(['admin']));
 
 // Admin creates owner or tenant (by mobile number)
 router.post('/users', async (req, res) => {
-  const { name, phone, role, flat_no } = req.body;
+  const { name, phone: rawPhone, role, flat_no } = req.body;
+  const phone = String(rawPhone || '').replace(/\D/g, '');
   if(!phone || !role) return res.status(400).json({ error: 'phone and role required' });
   if(!['owner','tenant','security_guard'].includes(role)) return res.status(400).json({ error: 'invalid role' });
   try{
@@ -97,6 +98,194 @@ router.delete('/buildings/:id', async (req, res) => {
   if(!b || b.societyId !== req.user.societyId) return res.status(404).json({ error: 'not found' });
   await b.destroy();
   await SuperadminLog.create({ user_id: req.user.id, action_type: 'building_deleted', details: { buildingId: id } });
+  res.json({ success: true });
+});
+
+// Flats (apartments) management
+router.get('/flats', async (req, res) => {
+  const flats = await Flat.findAll({ where: { societyId: req.user.societyId } });
+  res.json({ flats });
+});
+
+router.post('/flats', async (req, res) => {
+  const { flat_no, ownerId, buildingId } = req.body;
+  if(!flat_no) return res.status(400).json({ error: 'flat_no required' });
+  const f = await Flat.create({ flat_no, ownerId: ownerId || null, buildingId: buildingId || null, societyId: req.user.societyId });
+  await SuperadminLog.create({ user_id: req.user.id, action_type: 'flat_created', details: { flatId: f.id, flat_no: f.flat_no } });
+  res.json({ flat: f });
+});
+
+// Add Wing (building) and auto-generate flats
+router.post('/addWing', async (req, res) => {
+  try{
+    const { name, number_of_floors, flats_per_floor } = req.body;
+    if(!name || !number_of_floors || !flats_per_floor) return res.status(400).json({ error: 'name, number_of_floors and flats_per_floor required' });
+    const b = await Building.create({ name, address: '', total_units: Number(number_of_floors) * Number(flats_per_floor), total_floors: Number(number_of_floors), societyId: req.user.societyId });
+    // generate flat numbers like A-101, A-102... or simple numeric per wing
+    const createdFlats = [];
+    for(let floor=1; floor<=Number(number_of_floors); floor++){
+      for(let slot=1; slot<=Number(flats_per_floor); slot++){
+        const flat_no = `${name}-${floor}-${slot}`; // example: WingA-1-1
+        // Some DBs may not yet have the buildingId column (migration pending). Check and omit when missing.
+        let f;
+        try{
+          const desc = await Flat.sequelize.getQueryInterface().describeTable('flats');
+          if(desc && desc.buildingId){
+            f = await Flat.create({ societyId: req.user.societyId, flat_no, ownerId: null, buildingId: b.id });
+          }else{
+            f = await Flat.create({ societyId: req.user.societyId, flat_no, ownerId: null });
+          }
+        }catch(err){
+          // If describeTable or insert fails for schema reasons, try a minimal create to avoid 500
+          try{ f = await Flat.create({ societyId: req.user.societyId, flat_no, ownerId: null }); }catch(e2){ throw e2; }
+        }
+        createdFlats.push(f);
+      }
+    }
+    await SuperadminLog.create({ user_id: req.user.id, action_type: 'building_created_with_flats', details: { buildingId: b.id, created: createdFlats.length } });
+    res.json({ building: b, flats: createdFlats });
+  }catch(e){ console.error('addWing failed', e); res.status(500).json({ error: 'failed', detail: e && e.message }); }
+});
+
+// Get wings
+router.get('/getWings', async (req, res) => {
+  try{
+    const wings = await Building.findAll({ where: { societyId: req.user.societyId } });
+    res.json({ wings });
+  }catch(e){ console.error('getWings failed', e); res.status(500).json({ error: 'failed' }); }
+});
+
+// Get flats by wing
+router.get('/getFlatsByWing/:wingId', async (req, res) => {
+  try{
+    const { wingId } = req.params;
+    // Ensure the flats table actually has buildingId column (migration may be pending)
+    let hasBuildingId = true;
+    try{
+      const desc = await Flat.sequelize.getQueryInterface().describeTable('flats');
+      hasBuildingId = !!desc.buildingId;
+    }catch(err){
+      console.warn('describeTable failed', err && err.message);
+      hasBuildingId = false;
+    }
+
+    if(!hasBuildingId){
+      // Migration not applied — return a helpful error instead of a 500
+      return res.status(400).json({ error: 'schema_missing', detail: 'flats.buildingId column not found; run migrations' });
+    }
+
+    const flats = await Flat.findAll({ where: { buildingId: wingId, societyId: req.user.societyId } });
+    res.json({ flats });
+  }catch(e){ console.error('getFlatsByWing failed', e); res.status(500).json({ error: 'failed' }); }
+});
+
+// Assign user to flat (owner or tenant)
+router.post('/assignUserToFlat', async (req, res) => {
+  try{
+    const { wingId, flatId, role, name, phone, address, files } = req.body;
+    if(!flatId || !role || !phone) return res.status(400).json({ error: 'flatId, role and phone required' });
+    if(!['owner','tenant'].includes(role)) return res.status(400).json({ error: 'invalid role' });
+
+    const phoneClean = String(phone || '').replace(/\D/g, '');
+    let user = await User.findOne({ where: { phone: phoneClean } });
+    if(!user){
+      user = await User.create({ name: name || phoneClean, phone: phoneClean, role, societyId: req.user.societyId, address: address || '' });
+    } else {
+      // update role if necessary
+      if(user.role !== role) await user.update({ role });
+    }
+
+    // Owner assignment: ensure flat has no owner
+    const flat = await Flat.findByPk(flatId);
+    if(!flat || flat.societyId !== req.user.societyId) return res.status(404).json({ error: 'flat not found' });
+    if(role === 'owner'){
+      if(flat.ownerId){ return res.status(400).json({ error: 'flat already has an owner' }); }
+      await flat.update({ ownerId: user.id });
+      await SuperadminLog.create({ user_id: req.user.id, action_type: 'owner_assigned', details: { flatId, ownerId: user.id } });
+      return res.json({ success: true, flat, user });
+    }
+
+    // Tenant assignment: create Agreement linking tenant->flat
+    if(role === 'tenant'){
+      const ag = await Agreement.create({ flatId, ownerId: flat.ownerId || null, tenantId: user.id });
+      await SuperadminLog.create({ user_id: req.user.id, action_type: 'tenant_assigned', details: { flatId, tenantId: user.id } });
+      return res.json({ success: true, agreement: ag, user });
+    }
+  }catch(e){ console.error('assignUserToFlat failed', e); res.status(500).json({ error: 'failed', detail: e && e.message }); }
+});
+
+// Get flat history (agreements + documents + owners/tenants history)
+router.get('/getFlatHistory/:flatId', async (req, res) => {
+  try{
+    const { flatId } = req.params;
+    const ags = await Agreement.findAll({ where: { flatId } });
+    const docs = await Document.findAll({ where: { uploaded_by: req.user.id, societyId: req.user.societyId } });
+    res.json({ agreements: ags, documents: docs });
+  }catch(e){ console.error('getFlatHistory failed', e); res.status(500).json({ error: 'failed' }); }
+});
+
+// Upload owner documents
+router.post('/uploadOwnerDocs', async (req, res) => {
+  try{
+    const { title, file_url, file_type, ownerId } = req.body;
+    if(!file_url || !ownerId) return res.status(400).json({ error: 'file_url and ownerId required' });
+    const doc = await Document.create({ title, file_url, file_type, uploaded_by: ownerId, societyId: req.user.societyId });
+    await SuperadminLog.create({ user_id: req.user.id, action_type: 'owner_doc_uploaded', details: { ownerId, docId: doc.id } });
+    res.json({ document: doc });
+  }catch(e){ console.error('uploadOwnerDocs failed', e); res.status(500).json({ error: 'failed' }); }
+});
+
+// Admin: create a notice for this society (can target buildingIds array or targetAll boolean)
+router.post('/notices', async (req, res) => {
+  try{
+    const { title, description, image_url, buildingIds, targetAll } = req.body;
+    if(!title) return res.status(400).json({ error: 'title required' });
+    const notice = await Notice.create({ title, description, image_url, societyId: req.user.societyId });
+
+    // Determine recipients
+    let recipientUserIds = new Set();
+    if(targetAll){
+      const Op = require('sequelize').Op;
+      const allUsers = await User.findAll({ where: { societyId: req.user.societyId, role: { [Op.in]: ['owner','tenant'] } } });
+      allUsers.forEach(u=>recipientUserIds.add(String(u.id)));
+    } else if(Array.isArray(buildingIds) && buildingIds.length){
+      // find flats in those buildings
+      const flats = await Flat.findAll({ where: { buildingId: buildingIds, societyId: req.user.societyId } });
+      const flatIds = flats.map(f=>f.id);
+      flats.forEach(f=>{ if(f.ownerId) recipientUserIds.add(String(f.ownerId)); });
+      if(flatIds.length){
+        const ags = await Agreement.findAll({ where: { flatId: flatIds } });
+        ags.forEach(a=>{ if(a.tenantId) recipientUserIds.add(String(a.tenantId)); });
+      }
+    }
+
+    // create NoticeRecipient entries for recipients (if any)
+    let createdRecipients = [];
+    if(recipientUserIds.size){
+      const bulk = Array.from(recipientUserIds).map(uid=>({ noticeId: notice.id, userId: uid, societyId: req.user.societyId }));
+      createdRecipients = await NoticeRecipient.bulkCreate(bulk);
+    }
+
+    await SuperadminLog.create({ user_id: req.user.id, action_type: 'notice_created', details: { noticeId: notice.id, title, recipients: createdRecipients.length || 0 } });
+    res.json({ notice, recipients: createdRecipients.length || 0 });
+  }catch(e){ console.error('create notice failed', e); res.status(500).json({ error: 'failed', detail: e && e.message }); }
+});
+
+router.put('/flats/:id', async (req, res) => {
+  const { id } = req.params;
+  const f = await Flat.findByPk(id);
+  if(!f || f.societyId !== req.user.societyId) return res.status(404).json({ error: 'not found' });
+  await f.update(req.body);
+  await SuperadminLog.create({ user_id: req.user.id, action_type: 'flat_updated', details: { flatId: f.id, changes: req.body } });
+  res.json({ flat: f });
+});
+
+router.delete('/flats/:id', async (req, res) => {
+  const { id } = req.params;
+  const f = await Flat.findByPk(id);
+  if(!f || f.societyId !== req.user.societyId) return res.status(404).json({ error: 'not found' });
+  await f.destroy();
+  await SuperadminLog.create({ user_id: req.user.id, action_type: 'flat_deleted', details: { flatId: id } });
   res.json({ success: true });
 });
 

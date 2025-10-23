@@ -1,10 +1,20 @@
 const { Sequelize } = require('sequelize');
-const sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASS, {
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT || 5432,
-  dialect: 'postgres',
-  logging: false
-});
+
+let sequelize;
+// If Postgres env vars are provided, use Postgres. Otherwise fall back to a local sqlite DB for dev.
+if (process.env.DB_NAME && process.env.DB_USER) {
+  sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASS, {
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT || 5432,
+    dialect: 'postgres',
+    logging: false
+  });
+} else {
+  // sqlite fallback for local development/testing
+  const storagePath = process.env.SQLITE_FILE || './tmp/dev.sqlite';
+  sequelize = new Sequelize({ dialect: 'sqlite', storage: storagePath, logging: false });
+  console.warn('[models] Using sqlite fallback for development:', storagePath);
+}
 
 const db = { sequelize, Sequelize };
 
@@ -17,6 +27,7 @@ db.Notice = require('./notice')(sequelize);
 db.Agreement = require('./agreement')(sequelize);
 db.OTP = require('./otp')(sequelize);
 db.Building = require('./building')(sequelize);
+db.NoticeRecipient = require('./noticeRecipient')(sequelize);
 db.SubscriptionPlan = require('./subscriptionPlan')(sequelize);
 db.SuperadminLog = require('./superadminLog')(sequelize);
 db.AdminSociety = require('./adminSociety')(sequelize);
@@ -49,6 +60,11 @@ db.Complaint.belongsTo(db.Society, { foreignKey: 'societyId' });
 
 db.Society.hasMany(db.Notice, { foreignKey: 'societyId' });
 db.Notice.belongsTo(db.Society, { foreignKey: 'societyId' });
+// notice recipients (per-user routing)
+db.Notice.hasMany(db.NoticeRecipient, { foreignKey: 'noticeId' });
+db.NoticeRecipient.belongsTo(db.Notice, { foreignKey: 'noticeId' });
+db.User.hasMany(db.NoticeRecipient, { foreignKey: 'userId' });
+db.NoticeRecipient.belongsTo(db.User, { foreignKey: 'userId' });
 
 db.Society.hasMany(db.Helpline, { foreignKey: 'societyId' });
 db.Helpline.belongsTo(db.Society, { foreignKey: 'societyId' });

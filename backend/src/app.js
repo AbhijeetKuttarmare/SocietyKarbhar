@@ -15,5 +15,10 @@ const superadminRouter = require('./routes/superadmin');
 app.use('/api/superadmin', superadminRouter);
 const adminRouter = require('./routes/admin');
 app.use('/api/admin', adminRouter);
+const ownerRouter = require('./routes/owner');
+app.use('/api/owner', ownerRouter);
+// Notices (public to authenticated users)
+const noticesRouter = require('./routes/notices');
+app.use('/api/notices', noticesRouter);
 
 module.exports = app;
