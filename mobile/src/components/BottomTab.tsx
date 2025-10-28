@@ -13,7 +13,7 @@ type Props = {
 export default function BottomTab({ activeKey, onChange, items }: Props) {
   const defaultItems: Item[] = [
     { key: 'overview', label: 'Home', icon: 'home' },
-  { key: 'helplines', label: 'Helplines', icon: 'call' },
+    { key: 'helplines', label: 'Helplines', icon: 'call' },
     { key: 'tenants', label: 'My Tenants', icon: 'people' },
     { key: 'profile', label: 'Profile', icon: 'person' },
   ];

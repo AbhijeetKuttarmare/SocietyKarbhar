@@ -54,6 +54,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
 
   // Profile / data
   const [profile, setProfile] = useState<any>(user || { name: '', phone: '' });
+  const [ownerProfile, setOwnerProfile] = useState<any>(null);
   const [agreements, setAgreements] = useState<any[]>([]);
   const [documents, setDocuments] = useState<any[]>([]);
   const [rentHistory, setRentHistory] = useState<any[]>([]);
@@ -90,7 +91,18 @@ export default function TenantScreen({ user, onLogout }: Props) {
     fetchCounts();
     fetchNotices();
     loadLocalData();
+    // fetch owner profile if tenant
+    if (user && user.role === 'tenant') fetchOwner();
   }, []);
+
+  async function fetchOwner() {
+    try {
+      const r = await api.get('/api/tenant/owner');
+      if (r.data && r.data.owner) setOwnerProfile(r.data.owner);
+    } catch (e) {
+      console.warn('failed to fetch owner profile', e);
+    }
+  }
 
   function loadLocalData() {
     setAgreements([sampleAgreement]);
@@ -309,7 +321,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
                     (() => {
                       const items: Array<{ key: string; label: string; icon: any }> = [
                         { key: 'home', label: 'Home', icon: 'speedometer' },
-                        { key: 'profile', label: 'My Profile', icon: 'person' },
+                        { key: 'profile', label: 'My Owner', icon: 'person' },
                         { key: 'documents', label: 'My Documents', icon: 'folder' },
                         { key: 'rent', label: 'Rent Details', icon: 'card' },
                         { key: 'maintenance', label: 'Maintenance', icon: 'construct' },
@@ -370,7 +382,11 @@ export default function TenantScreen({ user, onLogout }: Props) {
                     <TouchableOpacity
                       key={String(key)}
                       style={[styles.menuItem, tab === key && styles.menuItemActive]}
-                      onPress={() => setTab(key as any)}
+                      onPress={() => {
+                        // when opening owner tab, refresh owner profile
+                        if (key === 'profile' && user && user.role === 'tenant') fetchOwner();
+                        setTab(key as any);
+                      }}
                     >
                       <Text style={[styles.menuItemText, tab === key && styles.menuItemTextActive]}>
                         {label}
@@ -435,46 +451,51 @@ export default function TenantScreen({ user, onLogout }: Props) {
 
                 {tab === 'profile' && (
                   <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>My Profile</Text>
-                    <ProfileCard
-                      name={profile?.name}
-                      phone={profile?.phone}
-                      email={profile?.email}
-                      address={profile?.address}
-                      imageUri={profile?.avatar}
-                      onEdit={async () => {
-                        try {
-                          const url = await pickAndUploadProfile();
-                          await api.put('/api/user', { avatar: url });
-                          setProfile((p: any) => ({ ...(p || {}), avatar: url }));
-                          alert('Profile photo updated');
-                        } catch (e) {
-                          console.warn('upload profile failed', e);
-                          alert('Upload failed');
-                        }
-                      }}
-                      onCall={(p) => {
-                        try {
-                          Linking.openURL(`tel:${p}`);
-                        } catch (e) {}
-                      }}
-                    />
-                    <TextInput
-                      style={styles.input}
-                      value={profile.name}
-                      onChangeText={(t) => setProfile((p: any) => ({ ...p, name: t }))}
-                      placeholder="Name"
-                    />
-                    <TextInput
-                      style={styles.input}
-                      value={profile.phone}
-                      onChangeText={(t) => setProfile((p: any) => ({ ...p, phone: t }))}
-                      placeholder="Phone"
-                      keyboardType="phone-pad"
-                    />
-                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-                      <Button title="Save" onPress={saveProfile} />
-                    </View>
+                    <Text style={styles.sectionTitle}>My Owner</Text>
+                    {user && user.role === 'tenant' ? (
+                      ownerProfile ? (
+                        <ProfileCard
+                          name={ownerProfile.name}
+                          phone={ownerProfile.phone}
+                          email={ownerProfile.email}
+                          address={ownerProfile.address}
+                          imageUri={ownerProfile.avatar || ownerProfile.image}
+                          onEdit={undefined}
+                          onCall={(p) => {
+                            try {
+                              Linking.openURL(`tel:${p}`);
+                            } catch (e) {}
+                          }}
+                        />
+                      ) : (
+                        <Text style={styles.muted}>Owner information not available.</Text>
+                      )
+                    ) : (
+                      // If current user is owner (unlikely here), show their own profile as before
+                      <ProfileCard
+                        name={profile?.name}
+                        phone={profile?.phone}
+                        email={profile?.email}
+                        address={profile?.address}
+                        imageUri={profile?.avatar}
+                        onEdit={async () => {
+                          try {
+                            const url = await pickAndUploadProfile();
+                            await api.put('/api/user', { avatar: url });
+                            setProfile((p: any) => ({ ...(p || {}), avatar: url }));
+                            alert('Profile photo updated');
+                          } catch (e) {
+                            console.warn('upload profile failed', e);
+                            alert('Upload failed');
+                          }
+                        }}
+                        onCall={(p) => {
+                          try {
+                            Linking.openURL(`tel:${p}`);
+                          } catch (e) {}
+                        }}
+                      />
+                    )}
                   </View>
                 )}
 

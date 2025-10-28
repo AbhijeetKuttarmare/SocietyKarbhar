@@ -620,11 +620,11 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       {isDesktop ? (
         <View style={styles.sidebar}>
           <View style={styles.logoRow}>
-              <View style={styles.avatarPlaceholder}>
-                <Text style={{ color: '#fff', fontWeight: '700' }}>O</Text>
-              </View>
-              {/* Name and phone removed as requested */}
+            <View style={styles.avatarPlaceholder}>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>O</Text>
             </View>
+            {/* Name and phone removed as requested */}
+          </View>
           <View style={styles.menu}>
             <TouchableOpacity
               style={[styles.menuItem, activeTab === 'overview' && styles.menuActive]}
@@ -810,7 +810,13 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
           {activeTab === 'helplines' && (
             <View>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
                 <Text style={styles.sectionTitle}>Helplines</Text>
                 {/* Only owners can add helplines */}
                 {user && user.role === 'owner' ? (
@@ -1540,7 +1546,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
       {/** Inline bottom bar (temporary hotfix) to force exact Owner order: Home, Support, My Tenants, Profile */}
       <View style={styles.bottomNavBar}>
-  {bottomItems.map((it) => (
+        {bottomItems.map((it) => (
           <TouchableOpacity
             key={it.key}
             style={styles.bottomNavItem}
@@ -1551,10 +1557,10 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               // Support / helplines: prefer direct call to primary number if available,
               // otherwise navigate to helplines tab.
               if (it.key === 'helplines') {
-                  // Always navigate to the helplines list so owner can see and add numbers.
-                  setActiveTab('helplines');
-                  return;
-                }
+                // Always navigate to the helplines list so owner can see and add numbers.
+                setActiveTab('helplines');
+                return;
+              }
 
               // Profile: open profile modal (Owner uses a modal for profile)
               if (it.key === 'profile') {
