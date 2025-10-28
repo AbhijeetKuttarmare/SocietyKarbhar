@@ -44,12 +44,18 @@ router.post('/admins', async (req, res) => {
     try { await require('../models').AdminSociety.create({ userId: admin.id, societyId: sid }); } catch(e){ }
   }
 
-  res.json({ admin });
+  // Return the created admin along with associated societies so UI can show names
+  const models = require('../models');
+  const created = await User.findByPk(admin.id, { include: [{ model: models.Society, as: 'adminSocieties', through: { attributes: [] } }] });
+
+  res.json({ admin: created });
 });
 
 // List admins
 router.get('/admins', async (req, res) => {
-  const admins = await User.findAll({ where: { role: 'admin' }, include: [{ association: 'adminSocieties', through: { attributes: [] } }] });
+  const models = require('../models');
+  // include the societies joined to each admin so frontend can display society names
+  const admins = await User.findAll({ where: { role: 'admin' }, include: [{ model: models.Society, as: 'adminSocieties', through: { attributes: [] } }] });
   res.json({ admins });
 });
 
@@ -136,7 +142,13 @@ router.delete('/plans/:id', async (req, res) => {
 });
 
 router.get('/societies', async (req, res) => {
-  const societies = await Society.findAll();
+  const models = require('../models');
+  // Include admin(s) linked via the AdminSociety join so frontend can show admin names
+  const societies = await Society.findAll({
+    include: [
+      { model: models.User, as: 'admins', through: { attributes: [] } }
+    ]
+  });
   res.json({ societies });
 });
 

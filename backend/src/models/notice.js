@@ -7,7 +7,8 @@ module.exports = (sequelize) => {
     title: { type: DataTypes.STRING },
     description: { type: DataTypes.TEXT },
     image_url: { type: DataTypes.TEXT },
-    societyId: { type: DataTypes.UUID }
+    societyId: { type: DataTypes.UUID },
+    created_by: { type: DataTypes.UUID }
   }, { tableName: 'notices' });
 
   return Notice;

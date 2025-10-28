@@ -25,7 +25,8 @@
     "react-native": "0.71.8",
     "react-native-linear-gradient": "^2.8.3",
     "react-native-reanimated": "~2.14.4",
-    "react-native-web": "0.18.10"
+    "react-native-web": "0.18.10",
+    "expo-image-picker": "~14.1.1"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
