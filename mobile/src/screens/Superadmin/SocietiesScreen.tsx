@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Alert,
   TextInput,
+  Modal,
 } from 'react-native';
 import api from '../../services/api';
 import { Feather } from '@expo/vector-icons';
@@ -39,6 +40,51 @@ export default function SocietiesScreen({ user }: Props) {
     mobile_number: '',
   });
   const [editingSociety, setEditingSociety] = useState<null | Society>(null);
+
+  // Open edit modal for a society: fetch full object and populate form
+  const openEdit = async (soc: Society) => {
+    try {
+      setLoading(true);
+      const headers: any = {};
+      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
+      const res = await api.get(`/api/superadmin/societies/${soc.id}`, { headers });
+      const s = res.data.society || res.data || soc;
+      setEditingSociety(s);
+      setForm({
+        name: s.name || '',
+        country: s.country || '',
+        city: s.city || '',
+        area: s.area || '',
+        mobile_number: s.mobile_number || s.mobile || '',
+      });
+      setModalVisible(true);
+    } catch (err: any) {
+      Alert.alert('Error', 'Could not load society details');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEditSave = async () => {
+    if (!editingSociety) return Alert.alert('Error', 'Nothing to save');
+    try {
+      setLoading(true);
+      const headers: any = {};
+      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
+      const res = await api.put(`/api/superadmin/societies/${editingSociety.id}`, form, {
+        headers,
+      });
+      // update local state
+      setSocieties((s) => s.map((x) => (x.id === editingSociety.id ? res.data.society : x)));
+      setEditingSociety(null);
+      setModalVisible(false);
+      setForm({ name: '', country: '', city: '', area: '', mobile_number: '' });
+    } catch (err: any) {
+      Alert.alert('Error', 'Failed to update society');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     fetchSocieties();
@@ -138,14 +184,14 @@ export default function SocietiesScreen({ user }: Props) {
                   <View style={styles.socCardActions}>
                     {hasAdmin ? (
                       <TouchableOpacity
-                        style={styles.smallBtnSuccess}
-                        onPress={() => Alert.alert('View / Edit', s.name)}
+                        style={[styles.smallBtn, { backgroundColor: '#10b981' }]}
+                        onPress={() => openEdit(s)}
                       >
-                        <Text style={styles.smallBtnTextWhite}>View / Edit</Text>
+                        <Text style={{ color: '#fff' }}>View / Edit</Text>
                       </TouchableOpacity>
                     ) : (
                       <TouchableOpacity style={styles.smallBtn} onPress={() => openCreateAdmin(s)}>
-                        <Text style={styles.smallBtnTextWhite}>Create Admin</Text>
+                        <Text style={{ color: '#fff' }}>Create Admin</Text>
                       </TouchableOpacity>
                     )}
                   </View>
@@ -160,6 +206,67 @@ export default function SocietiesScreen({ user }: Props) {
           )}
         </View>
       </ScrollView>
+
+      {/* Modal for Add/Edit */}
+      <Modal
+        visible={modalVisible}
+        animationType="slide"
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalInner}>
+          <Text style={styles.modalTitle}>{editingSociety ? 'Edit Society' : 'Add Society'}</Text>
+          <TextInput
+            placeholder="Name"
+            value={form.name}
+            onChangeText={(t) => setForm((p) => ({ ...p, name: t }))}
+            style={styles.input}
+          />
+          {editingSociety ? (
+            <TextInput
+              placeholder="Mobile (admin)"
+              value={form.mobile_number}
+              onChangeText={(t) => setForm((p) => ({ ...p, mobile_number: t }))}
+              style={styles.input}
+              keyboardType="phone-pad"
+            />
+          ) : null}
+          <TextInput
+            placeholder="Country"
+            value={form.country}
+            onChangeText={(t) => setForm((p) => ({ ...p, country: t }))}
+            style={styles.input}
+          />
+          <TextInput
+            placeholder="City"
+            value={form.city}
+            onChangeText={(t) => setForm((p) => ({ ...p, city: t }))}
+            style={styles.input}
+          />
+          <TextInput
+            placeholder="Area"
+            value={form.area}
+            onChangeText={(t) => setForm((p) => ({ ...p, area: t }))}
+            style={styles.input}
+          />
+          <View style={styles.modalActions}>
+            <TouchableOpacity
+              style={[styles.modalBtn, { backgroundColor: '#ef4444' }]}
+              onPress={() => {
+                setModalVisible(false);
+                setEditingSociety(null);
+              }}
+            >
+              <Text style={styles.modalBtnText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalBtn, { backgroundColor: '#4f46e5' }]}
+              onPress={editingSociety ? handleEditSave : handleAddSociety}
+            >
+              <Text style={styles.modalBtnText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

@@ -30,6 +30,8 @@ export default function TenantScreen({ user, onLogout }: Props) {
   const isMobile = width < 700;
   const isDesktop = width >= 900;
 
+  // header values will be derived at render time (below) so we can prefer ownerProfile when available
+
   const [showSidebar, setShowSidebar] = useState(false);
   // allow owner users to open the Owner dashboard inline (helps web testing where role routing may differ)
   const [showOwnerDashboard, setShowOwnerDashboard] = useState(false);
@@ -40,10 +42,12 @@ export default function TenantScreen({ user, onLogout }: Props) {
   const [tab, setTab] = useState<
     | 'home'
     | 'profile'
+    | 'owner'
     | 'documents'
     | 'rent'
     | 'maintenance'
     | 'notices'
+    | 'helplines'
     | 'agreement'
     | 'support'
     | 'complaints'
@@ -55,6 +59,10 @@ export default function TenantScreen({ user, onLogout }: Props) {
   // Profile / data
   const [profile, setProfile] = useState<any>(user || { name: '', phone: '' });
   const [ownerProfile, setOwnerProfile] = useState<any>(null);
+  const [helplines, setHelplines] = useState<any[]>([]);
+  const [showHelplineModal, setShowHelplineModal] = useState(false);
+  const [helplineName, setHelplineName] = useState('');
+  const [helplinePhone, setHelplinePhone] = useState('');
   const [agreements, setAgreements] = useState<any[]>([]);
   const [documents, setDocuments] = useState<any[]>([]);
   const [rentHistory, setRentHistory] = useState<any[]>([]);
@@ -92,8 +100,20 @@ export default function TenantScreen({ user, onLogout }: Props) {
     fetchNotices();
     loadLocalData();
     // fetch owner profile if tenant
-    if (user && user.role === 'tenant') fetchOwner();
+    if (user && user.role === 'tenant') {
+      fetchOwner();
+      fetchHelplines();
+    }
   }, []);
+
+  async function fetchHelplines() {
+    try {
+      const r = await api.get('/api/tenant/helplines');
+      setHelplines(r.data.helplines || r.data || []);
+    } catch (e) {
+      console.warn('tenant fetch helplines failed', e);
+    }
+  }
 
   async function fetchOwner() {
     try {
@@ -239,6 +259,38 @@ export default function TenantScreen({ user, onLogout }: Props) {
     </View>
   );
 
+  // derive header values here (ownerProfile may be available after fetch)
+  const societyName =
+    (ownerProfile && (ownerProfile.society?.name || ownerProfile.building?.name)) ||
+    (user &&
+      (user.society?.name ||
+        user.building?.name ||
+        user.societyName ||
+        (user.adminSocieties && user.adminSocieties[0]?.name))) ||
+    'Society';
+
+  const wingFlat = (() => {
+    if (!user) return '';
+    if (!(user.role === 'tenant' || user.role === 'owner')) return '';
+    const wing =
+      (ownerProfile && (ownerProfile.wing?.name || ownerProfile.building?.name)) ||
+      user.wing?.name ||
+      user.building?.name ||
+      user.buildingName ||
+      user.wing ||
+      '';
+    const flat =
+      (ownerProfile && (ownerProfile.flat?.flat_no || ownerProfile.flat_no)) ||
+      user.flat?.flat_no ||
+      user.flat_no ||
+      user.flatNo ||
+      '';
+    const parts: string[] = [];
+    if (wing) parts.push(String(wing));
+    if (flat) parts.push(String(flat));
+    return parts.join(' / ');
+  })();
+
   return (
     <SafeAreaView style={styles.safe}>
       {/* mobile top bar */}
@@ -252,7 +304,10 @@ export default function TenantScreen({ user, onLogout }: Props) {
             >
               <Ionicons name="menu" size={22} color="#111" />
             </TouchableOpacity>
-            <Text style={styles.appTitle}>Society Management</Text>
+            <View>
+              <Text style={styles.appTitle}>{societyName}</Text>
+              {wingFlat ? <Text style={styles.headerSub}>{wingFlat}</Text> : null}
+            </View>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <TouchableOpacity
@@ -321,7 +376,8 @@ export default function TenantScreen({ user, onLogout }: Props) {
                     (() => {
                       const items: Array<{ key: string; label: string; icon: any }> = [
                         { key: 'home', label: 'Home', icon: 'speedometer' },
-                        { key: 'profile', label: 'My Owner', icon: 'person' },
+                        // show tenant's own profile by default
+                        { key: 'profile', label: 'My Profile', icon: 'person' },
                         { key: 'documents', label: 'My Documents', icon: 'folder' },
                         { key: 'rent', label: 'Rent Details', icon: 'card' },
                         { key: 'maintenance', label: 'Maintenance', icon: 'construct' },
@@ -330,6 +386,10 @@ export default function TenantScreen({ user, onLogout }: Props) {
                         { key: 'agreement', label: 'Agreement Info', icon: 'document-text' },
                         { key: 'support', label: 'Support', icon: 'chatbubbles' },
                       ];
+                      // If current user is tenant, add a dedicated 'My Owner' tab
+                      if (user && user.role === 'tenant') {
+                        items.splice(2, 0, { key: 'owner', label: 'My Owner', icon: 'people' });
+                      }
                       return items.map((it) => (
                         <TouchableOpacity
                           key={it.key}
@@ -361,40 +421,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
             )}
 
             <View style={styles.mainArea}>
-              {/* Sidebar-like menu on wide screens, top tabs on mobile */}
-              <View style={[styles.menuBar, isMobile ? styles.menuBarMobile : {}]}>
-                <ScrollView
-                  horizontal={isMobile}
-                  contentContainerStyle={{ alignItems: 'center' }}
-                  showsHorizontalScrollIndicator={false}
-                >
-                  {[
-                    ['home', 'Home'],
-                    ['profile', 'My Profile'],
-                    ['documents', 'My Documents'],
-                    ['rent', 'Rent Details'],
-                    ['maintenance', 'Maintenance Requests'],
-                    ['complaints', 'Complaints'],
-                    ['notices', 'Notice Board'],
-                    ['agreement', 'Agreement Info'],
-                    ['support', 'Support'],
-                  ].map(([key, label]) => (
-                    <TouchableOpacity
-                      key={String(key)}
-                      style={[styles.menuItem, tab === key && styles.menuItemActive]}
-                      onPress={() => {
-                        // when opening owner tab, refresh owner profile
-                        if (key === 'profile' && user && user.role === 'tenant') fetchOwner();
-                        setTab(key as any);
-                      }}
-                    >
-                      <Text style={[styles.menuItemText, tab === key && styles.menuItemTextActive]}>
-                        {label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
+              {/* Top menu removed per design request: header now shows society name only */}
 
               {/* Permanent Add Tenant banner removed per request */}
 
@@ -451,50 +478,94 @@ export default function TenantScreen({ user, onLogout }: Props) {
 
                 {tab === 'profile' && (
                   <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>My Owner</Text>
-                    {user && user.role === 'tenant' ? (
-                      ownerProfile ? (
-                        <ProfileCard
-                          name={ownerProfile.name}
-                          phone={ownerProfile.phone}
-                          email={ownerProfile.email}
-                          address={ownerProfile.address}
-                          imageUri={ownerProfile.avatar || ownerProfile.image}
-                          onEdit={undefined}
-                          onCall={(p) => {
-                            try {
-                              Linking.openURL(`tel:${p}`);
-                            } catch (e) {}
-                          }}
-                        />
+                    <Text style={styles.sectionTitle}>My Profile</Text>
+                    <ProfileCard
+                      name={profile?.name}
+                      phone={profile?.phone}
+                      email={profile?.email}
+                      address={profile?.address}
+                      imageUri={profile?.avatar}
+                      onEdit={async () => {
+                        try {
+                          const url = await pickAndUploadProfile();
+                          await api.put('/api/user', { avatar: url });
+                          setProfile((p: any) => ({ ...(p || {}), avatar: url }));
+                          alert('Profile photo updated');
+                        } catch (e) {
+                          console.warn('upload profile failed', e);
+                          alert('Upload failed');
+                        }
+                      }}
+                      onCall={(p) => {
+                        try {
+                          Linking.openURL(`tel:${p}`);
+                        } catch (e) {}
+                      }}
+                    />
+                    <TextInput
+                      style={styles.input}
+                      value={profile.name}
+                      onChangeText={(t) => setProfile((p: any) => ({ ...p, name: t }))}
+                      placeholder="Name"
+                    />
+                    <TextInput
+                      style={styles.input}
+                      value={profile.phone}
+                      onChangeText={(t) => setProfile((p: any) => ({ ...p, phone: t }))}
+                      placeholder="Phone"
+                      keyboardType="phone-pad"
+                    />
+                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                      <Button title="Save" onPress={saveProfile} />
+                    </View>
+
+                    {/* Tenant documents shown in profile tab (parity with Owner/Admin profile view) */}
+                    <View style={{ marginTop: 12 }}>
+                      <Text style={[styles.sectionTitle, { marginBottom: 8 }]}>
+                        Uploaded Documents
+                      </Text>
+                      {documents && documents.length > 0 ? (
+                        documents.map((d: any) => (
+                          <View key={d.id} style={styles.listItem}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.listTitle}>
+                                {d.title || d.name || 'Document'}
+                              </Text>
+                              {d.file_url ? <Text style={styles.listSub}>{d.file_url}</Text> : null}
+                            </View>
+                            <TouchableOpacity
+                              onPress={() => alert('Open: ' + (d.file_url || d.uri || ''))}
+                            >
+                              <Text style={styles.link}>View</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ))
                       ) : (
-                        <Text style={styles.muted}>Owner information not available.</Text>
-                      )
-                    ) : (
-                      // If current user is owner (unlikely here), show their own profile as before
+                        <Text style={styles.muted}>No documents uploaded</Text>
+                      )}
+                    </View>
+                  </View>
+                )}
+
+                {tab === 'owner' && (
+                  <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>My Owner</Text>
+                    {ownerProfile ? (
                       <ProfileCard
-                        name={profile?.name}
-                        phone={profile?.phone}
-                        email={profile?.email}
-                        address={profile?.address}
-                        imageUri={profile?.avatar}
-                        onEdit={async () => {
-                          try {
-                            const url = await pickAndUploadProfile();
-                            await api.put('/api/user', { avatar: url });
-                            setProfile((p: any) => ({ ...(p || {}), avatar: url }));
-                            alert('Profile photo updated');
-                          } catch (e) {
-                            console.warn('upload profile failed', e);
-                            alert('Upload failed');
-                          }
-                        }}
+                        name={ownerProfile.name}
+                        phone={ownerProfile.phone}
+                        email={ownerProfile.email}
+                        address={ownerProfile.address}
+                        imageUri={ownerProfile.avatar || ownerProfile.image}
+                        onEdit={undefined}
                         onCall={(p) => {
                           try {
                             Linking.openURL(`tel:${p}`);
                           } catch (e) {}
                         }}
                       />
+                    ) : (
+                      <Text style={styles.muted}>Owner information not available.</Text>
                     )}
                   </View>
                 )}
@@ -599,6 +670,73 @@ export default function TenantScreen({ user, onLogout }: Props) {
                         </Text>
                       </View>
                     ))}
+                  </View>
+                )}
+
+                {tab === 'helplines' && (
+                  <View style={styles.section}>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <Text style={styles.sectionTitle}>Helplines</Text>
+                      {/* Tenants can add helplines for their society */}
+                      {user && user.role === 'tenant' ? (
+                        <TouchableOpacity
+                          style={styles.smallBtn}
+                          onPress={() => {
+                            setHelplineName('');
+                            setHelplinePhone('');
+                            setShowHelplineModal(true);
+                          }}
+                        >
+                          <Text style={{ color: '#fff' }}>Add Helpline</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+
+                    {helplines.length === 0 ? (
+                      <View style={{ padding: 24 }}>
+                        <Text style={{ color: '#666' }}>No helplines available.</Text>
+                      </View>
+                    ) : (
+                      <FlatList
+                        data={helplines}
+                        keyExtractor={(h: any) => h.id || h.phone || String(h.name)}
+                        renderItem={({ item }) => (
+                          <View
+                            style={{
+                              paddingVertical: 8,
+                              flexDirection: 'row',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                            }}
+                          >
+                            <View>
+                              <Text style={{ fontWeight: '700' }}>
+                                {item.name || item.title || 'Help'}
+                              </Text>
+                              <Text style={{ color: '#666', marginTop: 4 }}>
+                                {item.phone || item.contact || ''}
+                              </Text>
+                            </View>
+                            <TouchableOpacity
+                              onPress={() => {
+                                try {
+                                  Linking.openURL(`tel:${item.phone || item.contact}`);
+                                } catch (e) {}
+                              }}
+                              style={[styles.smallBtn, { paddingHorizontal: 14 }]}
+                            >
+                              <Text style={{ color: '#fff' }}>Call</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                      />
+                    )}
                   </View>
                 )}
 
@@ -908,18 +1046,40 @@ export default function TenantScreen({ user, onLogout }: Props) {
           Previously the shared BottomTab could emit a 'tenants' key which TenantScreen did not handle
           (resulting in a blank main area). Here we route 'tenants' -> OwnerScreen for owner-role users. */}
       {!isMobile ? null : (
+        // compute bottom items dynamically so 'My Owner' (tenants) is only shown to tenant role
         <BottomTab
-          activeKey={showOwnerDashboard ? 'tenants' : tab}
+          // map tenant-owned 'owner' tab to the BottomTab key 'tenants' so the bottom bar highlights correctly
+          activeKey={showOwnerDashboard ? 'tenants' : tab === 'owner' ? 'tenants' : tab}
+          items={(() => {
+            const items: any[] = [
+              { key: 'home', label: 'Home', icon: 'home' },
+              { key: 'helplines', label: 'Helplines', icon: 'call' },
+            ];
+            // include tenant-facing "My Owner" only for tenant users
+            if (user && user.role === 'tenant') {
+              items.push({ key: 'tenants', label: 'My Owner', icon: 'people' });
+            }
+            items.push({ key: 'profile', label: 'Profile', icon: 'person' });
+            return items;
+          })()}
           onChange={(k: any) => {
             try {
               if (k === 'tenants') {
                 if (user && user.role === 'owner') {
-                  // show Owner dashboard inline so Add Tenant UI is visible
+                  // show Owner dashboard inline so Add Tenant UI is visible for owner users
                   setShowOwnerDashboard(true);
                   return;
                 }
-                // not an owner: show a friendly message
-                alert('Only owners can access My Tenants from this app');
+                // For tenant users: ensure we refresh owner data before showing owner view
+                setShowOwnerDashboard(false);
+                if (user && user.role === 'tenant') {
+                  // fetch latest owner details then switch to owner tab
+                  fetchOwner();
+                  setTab('owner');
+                } else {
+                  // fallback: switch to owner tab
+                  setTab('owner');
+                }
                 return;
               }
               // any other tab: hide owner dashboard and change tenant tab state
@@ -958,6 +1118,7 @@ const styles: any = StyleSheet.create({
     borderColor: '#eee',
   },
   appTitle: { fontSize: 18, fontWeight: '800', color: '#111' },
+  headerSub: { fontSize: 12, color: '#666', marginTop: 2 },
   container: { flex: 1, backgroundColor: palette.bg },
   row: { flexDirection: 'row' },
   sidebar: { width: 260, padding: 16, backgroundColor: '#2d3436', justifyContent: 'space-between' },

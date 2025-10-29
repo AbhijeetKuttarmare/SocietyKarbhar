@@ -148,6 +148,29 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
     setCreatingAdminFor(soc);
     setAdminForm({ name: '', phone: soc.mobile_number || '', password: '' });
   };
+  // Fetch full society details before opening edit modal so form is populated with saved values
+  const openEdit = async (soc: Society) => {
+    try {
+      setLoading(true);
+      const headers: any = {};
+      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
+      const res = await api.get(`/api/superadmin/societies/${soc.id}`, { headers });
+      const s = res.data.society || res.data || soc;
+      setEditingSociety(s);
+      setForm({
+        name: s.name || '',
+        country: s.country || '',
+        city: s.city || '',
+        area: s.area || '',
+        mobile_number: s.mobile_number || s.mobile || '',
+      });
+      setModalVisible(true);
+    } catch (err: any) {
+      Alert.alert('Error', 'Could not load society details');
+    } finally {
+      setLoading(false);
+    }
+  };
   const handleCreateAdmin = async () => {
     if (!creatingAdminFor) return;
     if (!adminForm.phone || !adminForm.password)
@@ -424,10 +447,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                               {hasAdmin ? (
                                 <TouchableOpacity
                                   style={[styles.smallBtn, { backgroundColor: '#10b981' }]}
-                                  onPress={() => {
-                                    setEditingSociety(s);
-                                    setModalVisible(true);
-                                  }}
+                                  onPress={() => openEdit(s)}
                                 >
                                   <Text style={{ color: '#fff' }}>View / Edit</Text>
                                 </TouchableOpacity>
@@ -586,13 +606,15 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 onChangeText={(t) => setForm((p) => ({ ...p, name: t }))}
                 style={styles.input}
               />
-              <TextInput
-                placeholder="Mobile (admin)"
-                value={form.mobile_number}
-                onChangeText={(t) => setForm((p) => ({ ...p, mobile_number: t }))}
-                style={styles.input}
-                keyboardType="phone-pad"
-              />
+              {editingSociety ? (
+                <TextInput
+                  placeholder="Mobile (admin)"
+                  value={form.mobile_number}
+                  onChangeText={(t) => setForm((p) => ({ ...p, mobile_number: t }))}
+                  style={styles.input}
+                  keyboardType="phone-pad"
+                />
+              ) : null}
               <TextInput
                 placeholder="Country"
                 value={form.country}

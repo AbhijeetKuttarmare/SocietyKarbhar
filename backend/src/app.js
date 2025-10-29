@@ -4,21 +4,25 @@ const cors = require('cors');
 const cloudinary = require('cloudinary').v2;
 
 // Centralize Cloudinary configuration so all routers can use cloudinary.uploader
-if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
-	try {
-		cloudinary.config({
-			cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-			api_key: process.env.CLOUDINARY_API_KEY,
-			api_secret: process.env.CLOUDINARY_API_SECRET,
-			secure: true,
-		});
-		// also set CLOUDINARY_URL for modules that check that
-		if (!process.env.CLOUDINARY_URL) {
-			process.env.CLOUDINARY_URL = `cloudinary://${process.env.CLOUDINARY_API_KEY}:${process.env.CLOUDINARY_API_SECRET}@${process.env.CLOUDINARY_CLOUD_NAME}`;
-		}
-	} catch (e) {
-		console.warn('cloudinary central config failed', e && e.message);
-	}
+if (
+  process.env.CLOUDINARY_CLOUD_NAME &&
+  process.env.CLOUDINARY_API_KEY &&
+  process.env.CLOUDINARY_API_SECRET
+) {
+  try {
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+      secure: true,
+    });
+    // also set CLOUDINARY_URL for modules that check that
+    if (!process.env.CLOUDINARY_URL) {
+      process.env.CLOUDINARY_URL = `cloudinary://${process.env.CLOUDINARY_API_KEY}:${process.env.CLOUDINARY_API_SECRET}@${process.env.CLOUDINARY_CLOUD_NAME}`;
+    }
+  } catch (e) {
+    console.warn('cloudinary central config failed', e && e.message);
+  }
 }
 const app = express();
 
@@ -42,5 +46,9 @@ app.use('/api/notices', noticesRouter);
 // Tenant routes (maintenance / complaints)
 const tenantRouter = require('./routes/tenant');
 app.use('/api', tenantRouter);
+
+// current user helper (returns enriched user for the token)
+const userRouter = require('./routes/user');
+app.use('/api/user', userRouter);
 
 module.exports = app;

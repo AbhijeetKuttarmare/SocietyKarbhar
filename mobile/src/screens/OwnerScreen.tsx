@@ -305,6 +305,25 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   const isTablet = width >= 600 && width < 900;
   const isMobile = width < 600;
 
+  // derive society and flat/wing display values for header
+  const societyName =
+    (user &&
+      (user.society?.name ||
+        user.building?.name ||
+        user.societyName ||
+        (user.adminSocieties && user.adminSocieties[0]?.name))) ||
+    'Society';
+  const wingFlat = (() => {
+    if (!user) return '';
+    if (!(user.role === 'tenant' || user.role === 'owner')) return '';
+    const wing = user.wing?.name || user.building?.name || user.buildingName || user.wing || '';
+    const flat = user.flat?.flat_no || user.flat_no || user.flatNo || '';
+    const parts: string[] = [];
+    if (wing) parts.push(String(wing));
+    if (flat) parts.push(String(flat));
+    return parts.join(' / ');
+  })();
+
   async function pickPropertyDoc() {
     try {
       const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: false });
@@ -535,10 +554,14 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
             }))
           );
         try {
-          const f = await api.get('/api/admin/flats');
+          // Owners must fetch their flats via owner-scoped endpoint (admin endpoint is restricted)
+          const f = await api.get('/api/owner/flats');
           if (f.data && f.data.flats) setFlats(f.data.flats);
         } catch (e: any) {
-          /* ignore */
+          console.warn(
+            'failed to load flats for owner',
+            e && ((e as any).response?.data || e.message)
+          );
         }
         try {
           const c = await api.get('/api/notices/count');
@@ -676,9 +699,12 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
         </View>
       ) : (
         <View style={styles.mobileTopBar}>
-          {/* Compact header - name/phone removed */}
+          {/* Compact header - show society name and (for owner/tenant) wing/flat */}
           <View style={{ flex: 1, alignItems: 'center' }}>
-            <Text style={{ fontWeight: '800', fontSize: 16 }}>Society Management</Text>
+            <Text style={{ fontWeight: '800', fontSize: 16 }}>{societyName}</Text>
+            {wingFlat ? (
+              <Text style={{ color: '#666', fontSize: 12, marginTop: 2 }}>{wingFlat}</Text>
+            ) : null}
           </View>
           {/* Keep only notifications + logout controls (upload/person removed) */}
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>

@@ -2,7 +2,7 @@
 // This file sets extra.API_BASE_URL which is read by the mobile api modules.
 // You can override the default by setting the environment variable API_BASE_URL
 // before starting Expo, e.g. (Windows cmd):
-//   set API_BASE_URL=http://192.168.1.3:4001
+//   set API_BASE_URL=http://192.168.1.8:4001
 //   npx expo start --clear
 
 const fs = require('fs');
@@ -15,7 +15,7 @@ try {
   base = { expo: {} };
 }
 
-const DEFAULT_API = process.env.API_BASE_URL || 'http://192.168.1.7:4001';
+const DEFAULT_API = process.env.API_BASE_URL || 'http://192.168.1.5:4001';
 
 module.exports = () => {
   const expo = Object.assign({}, base.expo || {});

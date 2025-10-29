@@ -25,11 +25,6 @@ import * as FileSystem from 'expo-file-system';
 import ProfileCard from '../components/ProfileCard';
 import pickAndUploadProfile from '../services/uploadProfile';
 
-// Responsive Admin Screen
-// - Preserves all API calls / logic from your original file
-// - Improves mobile responsiveness by switching to a top navbar + drawer-style sidebar
-// - Uses useWindowDimensions for runtime layout decisions
-
 type Props = { user: any; onLogout: () => void };
 
 export default function AdminScreen({ user, onLogout }: Props) {
@@ -37,6 +32,14 @@ export default function AdminScreen({ user, onLogout }: Props) {
   const isDesktop = width >= 900;
   const isTablet = width >= 700 && width < 900;
   const isMobile = width < 700;
+
+  const societyName =
+    (user &&
+      (user.society?.name ||
+        user.building?.name ||
+        user.societyName ||
+        (user.adminSocieties && user.adminSocieties[0]?.name))) ||
+    'Society';
 
   const [lastApiError, setLastApiError] = useState<string | null>(null);
   useEffect(() => {
@@ -61,12 +64,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
   const [tab2, setTab2] = useState<'wings' | 'logs'>('wings');
   const [q, setQ] = useState('');
   const [showHelplineModal, setShowHelplineModal] = useState(false);
-  const [newHelpline, setNewHelpline] = useState({
-    type: 'ambulance',
-    name: '',
-    phone: '',
-    notes: '',
-  });
+  const [newHelpline, setNewHelpline] = useState({ type: 'ambulance', name: '', phone: '', notes: '' });
   const [showUserModal, setShowUserModal] = useState(false);
   const [showAddFlatModal, setShowAddFlatModal] = useState(false);
   const [newFlat, setNewFlat] = useState({ flat_no: '', buildingId: '' });
@@ -83,13 +81,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
     address: '',
     files: [] as any[],
   });
-  const [newUser, setNewUser] = useState({
-    name: '',
-    phone: '',
-    role: 'owner',
-    flat_no: '',
-    buildingId: '',
-  });
+  const [newUser, setNewUser] = useState({ name: '', phone: '', role: 'owner', flat_no: '', buildingId: '' });
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [userAvatar, setUserAvatar] = useState<string | undefined>((user as any)?.avatar || (user as any)?.image);
@@ -99,8 +91,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
   const [logs, setLogs] = useState<any[]>([]);
   const [notices, setNotices] = useState<any[]>([]);
   const [noticesCount, setNoticesCount] = useState<number>(0);
-
-  // new: mobile sidebar drawer
+  
   const [showSidebar, setShowSidebar] = useState(false);
 
   useEffect(() => {
@@ -526,9 +517,11 @@ export default function AdminScreen({ user, onLogout }: Props) {
           <TouchableOpacity onPress={() => setShowSidebar(true)} style={styles.hamburger}>
             <Ionicons name="menu" size={22} color="#111" />
           </TouchableOpacity>
-          <Text numberOfLines={1} style={styles.mobileTitle}>
-            Society Management
-          </Text>
+          <View style={{ flexDirection: 'column', alignItems: 'center' }}>
+            <Text numberOfLines={1} style={styles.mobileTitle}>
+              {societyName}
+            </Text>
+          </View>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <TouchableOpacity style={styles.iconBtn}>
               <Ionicons name="notifications-outline" size={20} />
@@ -876,9 +869,18 @@ export default function AdminScreen({ user, onLogout }: Props) {
                   renderItem={({ item }) => {
                     // defensive lookups for wing/building and flat fields
                     const wingName =
-                      item.wing?.name || item.building?.name || item.buildingName || item.wing || '';
+                      item.wing?.name ||
+                      item.building?.name ||
+                      item.buildingName ||
+                      item.wing ||
+                      '';
                     const flatNo =
-                      item.flat_no || item.flatNo || item.flatNumber || item.flat?.flat_no || item.flat || '';
+                      item.flat_no ||
+                      item.flatNo ||
+                      item.flatNumber ||
+                      item.flat?.flat_no ||
+                      item.flat ||
+                      '';
 
                     return (
                       <View style={styles.listItem}>
@@ -1175,7 +1177,9 @@ export default function AdminScreen({ user, onLogout }: Props) {
                 }
               }}
               onCall={(p) => {
-                try { (require('react-native').Linking as any).openURL(`tel:${p}`); } catch (e) {}
+                try {
+                  (require('react-native').Linking as any).openURL(`tel:${p}`);
+                } catch (e) {}
               }}
             />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>

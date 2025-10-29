@@ -17,6 +17,21 @@ if (process.env.CLOUDINARY_URL) {
 // Owners (and admins) may access these routes
 router.use(authenticate, authorize(['owner', 'admin']));
 
+// Flats accessible to this owner
+router.get('/flats', async (req, res) => {
+  try {
+    const { Flat } = require('../models');
+    // return flats in this society that belong to this owner
+    const flats = await Flat.findAll({
+      where: { societyId: req.user.societyId, ownerId: req.user.id },
+    });
+    res.json({ flats });
+  } catch (e) {
+    console.error('owner get flats failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
 // List tenants in the owner's society
 router.get('/tenants', async (req, res) => {
   try {
@@ -83,12 +98,33 @@ router.post('/tenants', async (req, res) => {
       move_out: move_out || null,
     });
 
-    // If flatId provided, create an Agreement linking tenant to flat (owner is current user)
+    // If flatId provided, validate the flat (must belong to this society) and
+    // ensure agreement links tenant -> flat -> owner. Prefer the flat.ownerId if set,
+    // otherwise assign the current owner (req.user.id) to the flat and use that.
     if (flatId) {
       try {
-        await Agreement.create({ flatId, ownerId: req.user.id, tenantId: user.id });
+        const f = await Flat.findByPk(flatId);
+        if (!f || f.societyId !== req.user.societyId) {
+          console.warn('[owner/create] flat not found or not in owner society', flatId);
+        } else {
+          // ensure the flat has an ownerId; if missing, set to current owner
+          let finalOwnerId = f.ownerId || req.user.id;
+          if (!f.ownerId) {
+            try {
+              await f.update({ ownerId: req.user.id });
+              finalOwnerId = req.user.id;
+            } catch (e) {
+              console.warn('[owner/create] failed to assign owner to flat', e && e.message);
+            }
+          }
+          try {
+            await Agreement.create({ flatId, ownerId: finalOwnerId, tenantId: user.id });
+          } catch (err) {
+            console.warn('[owner/create] failed to create agreement', err && err.message);
+          }
+        }
       } catch (err) {
-        console.warn('[owner/create] failed to create agreement', err && err.message);
+        console.warn('[owner/create] validation for flat failed', err && err.message);
       }
     }
 
@@ -121,13 +157,32 @@ router.put('/tenants/:id', async (req, res) => {
     for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
     await tenant.update(updates);
 
-    // If a flatId is provided in the update body, create an Agreement linking this tenant to that flat
+    // If a flatId is provided in the update body, validate and create an Agreement linking this tenant to that flat
     const { flatId } = req.body;
     if (flatId) {
       try {
-        await Agreement.create({ flatId, ownerId: req.user.id, tenantId: tenant.id });
+        const f = await Flat.findByPk(flatId);
+        if (!f || f.societyId !== req.user.societyId) {
+          console.warn('[owner/update] flat not found or not in owner society', flatId);
+        } else {
+          // ensure flat has an owner; prefer existing ownerId otherwise assign to current owner
+          let finalOwnerId = f.ownerId || req.user.id;
+          if (!f.ownerId) {
+            try {
+              await f.update({ ownerId: req.user.id });
+              finalOwnerId = req.user.id;
+            } catch (e) {
+              console.warn('[owner/update] failed to assign owner to flat', e && e.message);
+            }
+          }
+          try {
+            await Agreement.create({ flatId, ownerId: finalOwnerId, tenantId: tenant.id });
+          } catch (err) {
+            console.warn('[owner/update] failed to create agreement', err && err.message);
+          }
+        }
       } catch (err) {
-        console.warn('[owner/update] failed to create agreement', err && err.message);
+        console.warn('[owner/update] validation for flat failed', err && err.message);
       }
     }
 

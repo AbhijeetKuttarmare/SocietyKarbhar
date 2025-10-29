@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { SafeAreaView, StyleSheet } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { setAuthHeader, setToken } from './src/services/api';
+import api, { setAuthHeader, setToken } from './src/services/api';
 import LoginScreen from './src/screens/LoginScreen';
 import SuperadminScreen from './src/screens/SuperadminScreen';
 import AdminScreen from './src/screens/AdminScreen';
@@ -13,43 +13,61 @@ export default function App(): JSX.Element {
 
   const [restored, setRestored] = useState(false);
 
-  useEffect(()=>{
+  useEffect(() => {
     // restore user and token from AsyncStorage so hot reloads / refreshes keep the session
-    (async ()=>{
-      try{
+    (async () => {
+      try {
         const raw = await AsyncStorage.getItem('user');
         const token = await AsyncStorage.getItem('token');
-        if(token) setAuthHeader(token);
-        if(raw){
+        if (token) setAuthHeader(token);
+        if (raw) {
           const parsed = JSON.parse(raw);
           setUser(parsed);
+          // Refresh user from server to ensure associations (society/adminSocieties) are up-to-date
+          // This helps when admin assigns an owner/tenant to a society and the user's stored profile is stale
+          try {
+            const r = await api.get('/user/me');
+            if (r && r.data && r.data.user) {
+              await AsyncStorage.setItem('user', JSON.stringify(r.data.user));
+              setUser(r.data.user);
+            }
+          } catch (e) {
+            // ignore refresh errors (network/offline) and continue using cached user
+          }
         }
-      }catch(e){ console.warn('restore user failed', e); }
+      } catch (e) {
+        console.warn('restore user failed', e);
+      }
       setRestored(true);
     })();
   }, []);
 
-  async function handleLogin(u:any){
-    try{
+  async function handleLogin(u: any) {
+    try {
       // u should include token (LoginScreen passes token in onLogin)
-      if(u?.token){
+      if (u?.token) {
         await setToken(u.token);
         setAuthHeader(u.token);
       }
       await AsyncStorage.setItem('user', JSON.stringify(u));
       setUser(u);
-    }catch(e){ console.warn('handleLogin failed', e); setUser(u); }
+    } catch (e) {
+      console.warn('handleLogin failed', e);
+      setUser(u);
+    }
   }
 
-  async function handleLogout(){
-    try{
+  async function handleLogout() {
+    try {
       await setToken('');
       await AsyncStorage.removeItem('user');
-    }catch(e){ console.warn('logout cleanup failed', e); }
+    } catch (e) {
+      console.warn('logout cleanup failed', e);
+    }
     setUser(null);
   }
 
-  if(!restored){
+  if (!restored) {
     // while restoring session from storage, avoid rendering login to prevent flicker/logout
     return <SafeAreaView style={styles.container} />;
   }
@@ -61,7 +79,8 @@ export default function App(): JSX.Element {
       ) : (
         (() => {
           const role = user?.role;
-          if (role === 'superadmin') return <SuperadminScreen user={user} onLogout={handleLogout} />;
+          if (role === 'superadmin')
+            return <SuperadminScreen user={user} onLogout={handleLogout} />;
           if (role === 'admin') return <AdminScreen user={user} onLogout={handleLogout} />;
           if (role === 'owner') return <OwnerScreen user={user} onLogout={handleLogout} />;
           if (role === 'tenant') return <TenantScreen user={user} onLogout={handleLogout} />;
@@ -73,5 +92,5 @@ export default function App(): JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' }
+  container: { flex: 1, backgroundColor: '#fff' },
 });
