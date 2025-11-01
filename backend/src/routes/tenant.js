@@ -156,6 +156,15 @@ router.post('/upload_form', upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'file required' });
+    try {
+      console.log(
+        '[tenant/upload_form] received file:',
+        file.originalname,
+        file.mimetype,
+        'size=',
+        file.size || (file.buffer && file.buffer.length)
+      );
+    } catch (e) {}
 
     // If Cloudinary configured, upload the binary
     if (
@@ -180,8 +189,14 @@ router.post('/upload_form', upload.single('file'), async (req, res) => {
     const mime = file.mimetype || 'application/octet-stream';
     return res.json({ url: `data:${mime};base64,${base64}` });
   } catch (e) {
-    console.error('tenant upload_form failed', e && e.message);
-    return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+    console.error('tenant upload_form failed', e && e.message, e && e.stack);
+    return res
+      .status(500)
+      .json({
+        error: 'upload failed',
+        detail: e && e.message,
+        stack: process.env.NODE_ENV !== 'production' ? e && e.stack : undefined,
+      });
   }
 });
 
@@ -225,6 +240,82 @@ router.post('/user/avatar', upload.single('file'), async (req, res) => {
   } catch (e) {
     console.error('user avatar upload failed', e && e.message);
     return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+  }
+});
+
+// Create a document record for the current tenant (used by tenant UI to save uploaded docs)
+router.post('/documents', async (req, res) => {
+  try {
+    const { title, file_url, file_type } = req.body;
+    if (!file_url) return res.status(400).json({ error: 'file_url required' });
+    const models = require('../models');
+    const { Document } = models;
+    if (!Document) return res.status(500).json({ error: 'document model not available' });
+    const doc = await Document.create({
+      title: title || null,
+      file_url,
+      file_type: file_type || null,
+      uploaded_by: req.user.id,
+      societyId: req.user.societyId,
+    });
+    res.json({ document: doc });
+  } catch (e) {
+    console.error('tenant create doc failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Alias route so clients posting to /api/tenant/documents succeed (frontend uses /api/tenant/* paths)
+router.post('/tenant/documents', async (req, res) => {
+  try {
+    const { title, file_url, file_type } = req.body;
+    if (!file_url) return res.status(400).json({ error: 'file_url required' });
+    const models = require('../models');
+    const { Document } = models;
+    if (!Document) return res.status(500).json({ error: 'document model not available' });
+    const doc = await Document.create({
+      title: title || null,
+      file_url,
+      file_type: file_type || null,
+      uploaded_by: req.user.id,
+      societyId: req.user.societyId,
+    });
+    res.json({ document: doc });
+  } catch (e) {
+    console.error('tenant create doc (alias) failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// List documents uploaded by the current tenant
+router.get('/documents', async (req, res) => {
+  try {
+    const models = require('../models');
+    const { Document } = models;
+    if (!Document) return res.status(500).json({ error: 'document model not available' });
+    const docs = await Document.findAll({
+      where: { uploaded_by: req.user.id, societyId: req.user.societyId },
+    });
+    res.json({ documents: docs });
+  } catch (e) {
+    console.error('tenant documents list failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Alias to support frontend posting/reading from /api/tenant/documents
+router.get('/tenant/documents', async (req, res) => {
+  try {
+    const models = require('../models');
+    const { Document } = models;
+    if (!Document) return res.status(500).json({ error: 'document model not available' });
+    const docs = await Document.findAll({
+      where: { uploaded_by: req.user.id, societyId: req.user.societyId },
+    });
+    res.json({ documents: docs });
+  } catch (e) {
+    console.error('tenant documents list (alias) failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
   }
 });
 

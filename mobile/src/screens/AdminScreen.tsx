@@ -24,10 +24,11 @@ import {
 import api from '../services/api';
 import { Ionicons } from '@expo/vector-icons';
 import BottomTab from '../components/BottomTab';
-import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import ProfileCard from '../components/ProfileCard';
-import pickAndUploadProfile, { pickAndUploadFile as sharedPickAndUploadFile } from '../services/uploadProfile';
+import pickAndUploadProfile, {
+  pickAndUploadFile as sharedPickAndUploadFile,
+} from '../services/uploadProfile';
 
 // Responsive Admin Screen
 // - Preserves all API calls / logic from your original file
@@ -410,6 +411,8 @@ export default function AdminScreen({ user, onLogout }: Props) {
   const [agrTenantId, setAgrTenantId] = useState('');
   const [agrUrl, setAgrUrl] = useState('');
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadingAadhaar, setUploadingAadhaar] = useState(false);
+  const [uploadingPan, setUploadingPan] = useState(false);
   const [showCreateNoticeModal, setShowCreateNoticeModal] = useState(false);
   const [newNotice, setNewNotice] = useState({
     title: '',
@@ -468,6 +471,10 @@ export default function AdminScreen({ user, onLogout }: Props) {
       const r = await api.get('/api/admin/users/' + u.id + '/documents');
       const his = await api.get('/api/admin/users/' + u.id + '/history');
       setDetailUser({ user: u, documents: r.data.documents || [], history: his.data });
+      // If the user object contains flat info, prefill the agreement flat id to help the admin
+      // find the correct flat when creating an agreement.
+      const possibleFlatId = (u && (u.flatId || u.flat_id || (u.flat && u.flat.id))) || '';
+      if (possibleFlatId) setAgrFlatId(String(possibleFlatId));
     } catch (e) {
       console.warn(e);
     }
@@ -475,7 +482,13 @@ export default function AdminScreen({ user, onLogout }: Props) {
 
   async function pickAndUploadFile(docType?: string) {
     try {
-      const url = await sharedPickAndUploadFile({ accept: '*/*', fallbackApiPath: '/api/admin/upload' });
+      if (docType && /aadhaar|aadhar/i.test(String(docType))) setUploadingAadhaar(true);
+      if (docType && /\bpan\b/i.test(String(docType))) setUploadingPan(true);
+
+      const url = await sharedPickAndUploadFile({
+        accept: '*/*',
+        fallbackApiPath: '/api/admin/upload',
+      });
       if (!url) return;
       if (detailUser && detailUser.user) {
         const title = docType ? `${docType}` : '';
@@ -484,11 +497,17 @@ export default function AdminScreen({ user, onLogout }: Props) {
           file_url: url,
           file_type: undefined,
         });
-        setDetailUser((s: any) => ({ ...s, documents: [...(s?.documents || []), r.data.document] }));
+        setDetailUser((s: any) => ({
+          ...s,
+          documents: [...(s?.documents || []), r.data.document],
+        }));
         fetchLogs();
       }
     } catch (e) {
       console.warn('pick/upload failed', e);
+    } finally {
+      if (docType && /aadhaar|aadhar/i.test(String(docType))) setUploadingAadhaar(false);
+      if (docType && /\bpan\b/i.test(String(docType))) setUploadingPan(false);
     }
   }
 
@@ -1410,30 +1429,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
         </TouchableOpacity>
       </Modal>
 
-      {/* Image preview modal (shows Aadhaar/PAN or any document image inside the app) */}
-      <Modal visible={showPreviewModal} animationType="fade" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContentLarge, { alignItems: 'center' }]}>
-            {previewImageUrl ? (
-              <Image
-                source={{ uri: previewImageUrl }}
-                style={{ width: '100%', height: 420, resizeMode: 'contain', backgroundColor: '#000' }}
-              />
-            ) : (
-              <Text>No preview available</Text>
-            )}
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
-              <Button
-                title="Close"
-                onPress={() => {
-                  setShowPreviewModal(false);
-                  setPreviewImageUrl(null);
-                }}
-              />
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Image preview is rendered inside the User Detail modal so it appears above the form. */}
 
       {/* Create Notice modal */}
       <Modal visible={showCreateNoticeModal} animationType="slide" transparent>
@@ -1914,16 +1910,26 @@ export default function AdminScreen({ user, onLogout }: Props) {
               <Text style={styles.modalTitle}>{detailUser?.user?.name || 'User'}</Text>
               <Text style={styles.label}>Phone: {detailUser?.user?.phone}</Text>
 
-              <Text style={[styles.sectionTitle, { marginTop: 8 }]}>Documents</Text>
+              {/* <Text style={[styles.sectionTitle, { marginTop: 8 }]}>Documents</Text> */}
               <FlatList
                 data={detailUser?.documents || []}
                 keyExtractor={(d: any) => d.id}
-                renderItem={({ item }) => (
-                  <View style={{ padding: 8 }}>
-                    <Text style={styles.listTitle}>{item.title || item.file_type}</Text>
-                    <Text style={styles.listSub}>{item.file_url}</Text>
-                  </View>
-                )}
+                renderItem={({ item }) => {
+                  // Skip rendering Aadhaar/PAN entries here — we show dedicated View buttons below
+                  if (
+                    item.file_url === aadhaarDoc?.file_url ||
+                    item.file_url === panDoc?.file_url
+                  ) {
+                    return null;
+                  }
+
+                  return (
+                    <View style={{ padding: 8 }}>
+                      <Text style={styles.listTitle}>{item.title || item.file_type}</Text>
+                      {item.file_url ? <Text style={styles.listSub}>{item.file_url}</Text> : null}
+                    </View>
+                  );
+                }}
               />
 
               {/* Aadhaar / PAN upload buttons (replaces generic upload/link UI) */}
@@ -1936,21 +1942,19 @@ export default function AdminScreen({ user, onLogout }: Props) {
                   <TouchableOpacity
                     style={[styles.actionBtn, { paddingVertical: 8, paddingHorizontal: 12 }]}
                     onPress={() => pickAndUploadFile('Aadhaar Card')}
+                    disabled={uploadingAadhaar}
                   >
-                    <Ionicons name="cloud-upload-outline" size={16} />
-                    <Text style={[styles.actionBtnText, { marginLeft: 8 }]}>
-                      Upload Aadhaar Card
-                    </Text>
+                    {uploadingAadhaar ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons name="cloud-upload-outline" size={16} />
+                        <Text style={[styles.actionBtnText, { marginLeft: 8 }]}>
+                          Upload Aadhaar Card
+                        </Text>
+                      </>
+                    )}
                   </TouchableOpacity>
-
-                  {aadhaarDoc ? (
-                    <TouchableOpacity
-                      style={{ marginLeft: 8, padding: 8 }}
-                      onPress={() => viewDocument(aadhaarDoc.file_url)}
-                    >
-                      <Ionicons name="eye-outline" size={22} color="#374151" />
-                    </TouchableOpacity>
-                  ) : null}
                 </View>
 
                 <View style={{ height: 8 }} />
@@ -1959,17 +1963,50 @@ export default function AdminScreen({ user, onLogout }: Props) {
                   <TouchableOpacity
                     style={[styles.actionBtn, { paddingVertical: 8, paddingHorizontal: 12 }]}
                     onPress={() => pickAndUploadFile('PAN Card')}
+                    disabled={uploadingPan}
                   >
-                    <Ionicons name="cloud-upload-outline" size={16} />
-                    <Text style={[styles.actionBtnText, { marginLeft: 8 }]}>Upload PAN Card</Text>
+                    {uploadingPan ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons name="cloud-upload-outline" size={16} />
+                        <Text style={[styles.actionBtnText, { marginLeft: 8 }]}>
+                          Upload PAN Card
+                        </Text>
+                      </>
+                    )}
                   </TouchableOpacity>
+                </View>
+
+                {/* Dedicated view buttons for Aadhaar / PAN (show when respective docs exist) */}
+                <View style={{ marginTop: 8, flexDirection: 'row', gap: 12 }}>
+                  {aadhaarDoc ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.actionBtnOutline,
+                        { flexDirection: 'row', alignItems: 'center' },
+                      ]}
+                      onPress={() => viewDocument(aadhaarDoc.file_url)}
+                    >
+                      <Ionicons name="eye-outline" size={18} color="#374151" />
+                      <Text style={[styles.actionBtnOutlineText, { marginLeft: 8 }]}>
+                        View Aadhaar Card
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
 
                   {panDoc ? (
                     <TouchableOpacity
-                      style={{ marginLeft: 8, padding: 8 }}
+                      style={[
+                        styles.actionBtnOutline,
+                        { flexDirection: 'row', alignItems: 'center' },
+                      ]}
                       onPress={() => viewDocument(panDoc.file_url)}
                     >
-                      <Ionicons name="eye-outline" size={22} color="#374151" />
+                      <Ionicons name="eye-outline" size={18} color="#374151" />
+                      <Text style={[styles.actionBtnOutlineText, { marginLeft: 8 }]}>
+                        View PAN Card
+                      </Text>
                     </TouchableOpacity>
                   ) : null}
                 </View>
@@ -1998,6 +2035,14 @@ export default function AdminScreen({ user, onLogout }: Props) {
                   title="Save"
                   onPress={async () => {
                     try {
+                      // Client-side validation to avoid sending incomplete requests
+                      const missing: string[] = [];
+                      if (!agrFlatId) missing.push('flatId');
+                      if (!detailUser?.user?.id) missing.push('ownerId');
+                      if (!agrTenantId) missing.push('tenantId');
+                      if (!agrUrl) missing.push('file_url');
+                      if (missing.length) return alert('Please provide: ' + missing.join(', '));
+
                       const r = await api.post('/api/admin/agreements', {
                         flatId: agrFlatId,
                         ownerId: detailUser.user.id,
@@ -2014,6 +2059,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
                       fetchLogs();
                     } catch (e) {
                       console.warn(e);
+                      alert('Save failed');
                     }
                   }}
                 />
@@ -2023,6 +2069,48 @@ export default function AdminScreen({ user, onLogout }: Props) {
                 <Button title="Close" onPress={() => setShowUserDetail(false)} />
               </View>
             </ScrollView>
+
+            {/* Inline preview overlay: appears above the form inside the same modal */}
+            {showPreviewModal && (
+              <View
+                style={{
+                  position: 'absolute',
+                  top: 12,
+                  left: 12,
+                  right: 12,
+                  bottom: 12,
+                  backgroundColor: 'rgba(0,0,0,0.85)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 9999,
+                  borderRadius: 10,
+                  padding: 12,
+                }}
+              >
+                {previewImageUrl ? (
+                  <Image
+                    source={{ uri: previewImageUrl }}
+                    style={{
+                      width: '100%',
+                      height: '80%',
+                      resizeMode: 'contain',
+                      backgroundColor: '#000',
+                    }}
+                  />
+                ) : (
+                  <Text style={{ color: '#fff' }}>No preview available</Text>
+                )}
+                <View style={{ marginTop: 8 }}>
+                  <Button
+                    title="Close"
+                    onPress={() => {
+                      setShowPreviewModal(false);
+                      setPreviewImageUrl(null);
+                    }}
+                  />
+                </View>
+              </View>
+            )}
           </View>
         </View>
       </Modal>

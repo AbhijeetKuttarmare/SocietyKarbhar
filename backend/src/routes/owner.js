@@ -100,6 +100,43 @@ router.post('/tenants', async (req, res) => {
       move_out: move_out || null,
     });
 
+    // If owner provided identity URLs (aadhaar/pan) include them as documents
+    try {
+      const aadhaar = req.body.aadhaar_url || req.body.aadhaar || null;
+      const pan = req.body.pan_url || req.body.pan || null;
+      const docsToCreate = [];
+      if (aadhaar)
+        docsToCreate.push({
+          title: 'Aadhaar',
+          file_url: aadhaar,
+          file_type: 'application/octet-stream',
+        });
+      if (pan)
+        docsToCreate.push({ title: 'PAN', file_url: pan, file_type: 'application/octet-stream' });
+
+      for (const d of docsToCreate) {
+        try {
+          // avoid duplicate identical file_url entries for same tenant
+          const existing = await Document.findOne({
+            where: { uploaded_by: user.id, file_url: d.file_url },
+          });
+          if (!existing) {
+            await Document.create({
+              title: d.title,
+              file_url: d.file_url,
+              file_type: d.file_type,
+              uploaded_by: user.id,
+              societyId: req.user.societyId,
+            });
+          }
+        } catch (e) {
+          console.warn('[owner/create] failed to create identity document', e && e.message);
+        }
+      }
+    } catch (e) {
+      console.warn('[owner/create] identity docs processing failed', e && e.message);
+    }
+
     // If flatId provided, validate the flat (must belong to this society) and
     // ensure agreement links tenant -> flat -> owner. Prefer the flat.ownerId if set,
     // otherwise assign the current owner (req.user.id) to the flat and use that.
@@ -153,6 +190,9 @@ router.put('/tenants/:id', async (req, res) => {
       'rent',
       'deposit',
       'phone',
+      // allow owner to set tenant Aadhaar/PAN URLs
+      'aadhaar_url',
+      'pan_url',
       'status',
     ];
     const updates = {};
@@ -186,6 +226,35 @@ router.put('/tenants/:id', async (req, res) => {
       } catch (err) {
         console.warn('[owner/update] validation for flat failed', err && err.message);
       }
+    }
+
+    // If the owner supplied aadhaar_url / pan_url in update body, persist them as Documents
+    try {
+      const aadhaar = req.body.aadhaar_url || req.body.aadhaar || null;
+      const pan = req.body.pan_url || req.body.pan || null;
+      const docsToCreate = [];
+      if (aadhaar) docsToCreate.push({ title: 'Aadhaar', file_url: aadhaar });
+      if (pan) docsToCreate.push({ title: 'PAN', file_url: pan });
+      for (const d of docsToCreate) {
+        try {
+          const existing = await Document.findOne({
+            where: { uploaded_by: tenant.id, file_url: d.file_url },
+          });
+          if (!existing) {
+            await Document.create({
+              title: d.title,
+              file_url: d.file_url,
+              file_type: d.file_type || 'application/octet-stream',
+              uploaded_by: tenant.id,
+              societyId: req.user.societyId,
+            });
+          }
+        } catch (e) {
+          console.warn('[owner/update] failed to create identity document', e && e.message);
+        }
+      }
+    } catch (e) {
+      console.warn('[owner/update] identity docs processing failed', e && e.message);
     }
 
     res.json({ user: tenant });
@@ -389,6 +458,15 @@ router.post('/upload_form', upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'file required' });
+    try {
+      console.log(
+        '[owner/upload_form] received file:',
+        file.originalname,
+        file.mimetype,
+        'size=',
+        file.size || (file.buffer && file.buffer.length)
+      );
+    } catch (e) {}
 
     if (
       process.env.CLOUDINARY_CLOUD_NAME &&
@@ -410,8 +488,12 @@ router.post('/upload_form', upload.single('file'), async (req, res) => {
     const mime = file.mimetype || 'application/octet-stream';
     return res.json({ url: `data:${mime};base64,${base64}` });
   } catch (e) {
-    console.error('owner upload_form failed', e && e.message);
-    return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+    console.error('owner upload_form failed', e && e.message, e && e.stack);
+    return res.status(500).json({
+      error: 'upload failed',
+      detail: e && e.message,
+      stack: process.env.NODE_ENV !== 'production' ? e && e.stack : undefined,
+    });
   }
 });
 
@@ -476,18 +558,42 @@ router.post('/helplines', async (req, res) => {
 
 router.post('/documents', async (req, res) => {
   try {
-    const { title, file_url, file_type } = req.body;
+    const { title, file_url, file_type, tenantId, userId } = req.body;
     if (!file_url) return res.status(400).json({ error: 'file_url required' });
+
+    // If the owner provided a tenantId (or userId) it means this document is intended
+    // for that tenant's history. In that case, set uploaded_by to the tenant's id so
+    // it appears in tenant history endpoints which query by uploaded_by = tenantId.
+    const targetUserId = tenantId || userId || null;
+    const uploadedBy = targetUserId || req.user.id;
+
     const doc = await Document.create({
       title,
       file_url,
       file_type,
-      uploaded_by: req.user.id,
+      uploaded_by: uploadedBy,
       societyId: req.user.societyId,
     });
     res.json({ document: doc });
   } catch (e) {
     console.error('owner create doc failed', e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Delete a document (owner-scoped) - owners may delete documents belonging to their society
+router.delete('/documents/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await Document.findByPk(id);
+    if (!doc || doc.societyId !== req.user.societyId) {
+      return res.status(404).json({ error: 'not found' });
+    }
+
+    await doc.destroy();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('owner delete doc failed', e && e.message);
     res.status(500).json({ error: 'failed', detail: e && e.message });
   }
 });

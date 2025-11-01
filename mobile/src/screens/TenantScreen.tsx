@@ -5,23 +5,22 @@ import {
   Text,
   Button,
   StyleSheet,
+  FlatList,
+  TextInput,
   TouchableOpacity,
   Modal,
-  FlatList,
   ScrollView,
-  TextInput,
-  Platform,
+  ActivityIndicator,
   useWindowDimensions,
   Image,
   Linking,
 } from 'react-native';
 import api from '../services/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import BottomTab from '../components/BottomTab';
-import OwnerScreen from './OwnerScreen';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
 import ProfileCard from '../components/ProfileCard';
+import OwnerScreen from './OwnerScreen';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 
 type Props = { user: any; onLogout: () => void };
@@ -29,17 +28,7 @@ type Props = { user: any; onLogout: () => void };
 export default function TenantScreen({ user, onLogout }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width < 700;
-  const isDesktop = width >= 900;
 
-  // header values will be derived at render time (below) so we can prefer ownerProfile when available
-
-  const [showSidebar, setShowSidebar] = useState(false);
-  // allow owner users to open the Owner dashboard inline (helps web testing where role routing may differ)
-  const [showOwnerDashboard, setShowOwnerDashboard] = useState(false);
-  // request OwnerScreen to open Add Tenant modal
-  const [ownerOpenRequest, setOwnerOpenRequest] = useState(false);
-
-  // UI state
   const [tab, setTab] = useState<
     | 'home'
     | 'profile'
@@ -48,194 +37,80 @@ export default function TenantScreen({ user, onLogout }: Props) {
     | 'rent'
     | 'maintenance'
     | 'notices'
-    | 'helplines'
     | 'agreement'
     | 'support'
     | 'complaints'
+    | 'helplines'
   >('home');
-  const [noticesCount, setNoticesCount] = useState<number>(0);
-  const [notices, setNotices] = useState<any[]>([]);
-  const [showNoticeModal, setShowNoticeModal] = useState(false);
-
-  // Profile / data
   const [profile, setProfile] = useState<any>(user || { name: '', phone: '' });
-  const [ownerProfile, setOwnerProfile] = useState<any>(null);
-  const [helplines, setHelplines] = useState<any[]>([]);
-  const [showHelplineModal, setShowHelplineModal] = useState(false);
-  const [helplineName, setHelplineName] = useState('');
-  const [helplinePhone, setHelplinePhone] = useState('');
-  const [agreements, setAgreements] = useState<any[]>([]);
+  const [ownerProfile, setOwnerProfile] = useState<any | null>(null);
   const [documents, setDocuments] = useState<any[]>([]);
-  const [rentHistory, setRentHistory] = useState<any[]>([]);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [uploadingAadhaar, setUploadingAadhaar] = useState(false);
+  const [uploadingPan, setUploadingPan] = useState(false);
+  const [uploadingDocId, setUploadingDocId] = useState<string | null>(null);
+
+  // UI state for various modals and tenant lists (minimal defaults to satisfy render)
+  const [showSidebar, setShowSidebar] = useState(false);
+  const [showNoticeModal, setShowNoticeModal] = useState(false);
+  const [noticesCount, setNoticesCount] = useState(0);
+  const [notices, setNotices] = useState<any[]>([]);
+  const [showOwnerDashboard, setShowOwnerDashboard] = useState(false);
+  const [ownerOpenRequest, setOwnerOpenRequest] = useState(false);
+
+  const [agreements, setAgreements] = useState<any[]>([]);
   const [maintenance, setMaintenance] = useState<any[]>([]);
-  const [complaints, setComplaints] = useState<any[]>([]);
+  const [rentHistory, setRentHistory] = useState<any[]>([]);
+
+  const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
   const [showMarkPaidModal, setShowMarkPaidModal] = useState(false);
   const [selectedBill, setSelectedBill] = useState<any | null>(null);
-  const [proofUri, setProofUri] = useState<string | null>(null);
 
-  // Modals for forms
-  const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
-  const [maintenanceForm, setMaintenanceForm] = useState({ title: '', description: '', image: '' });
-  const [showSupportModal, setShowSupportModal] = useState(false);
-  const [supportForm, setSupportForm] = useState({ message: '', image: '' });
+  const [showHelplineModal, setShowHelplineModal] = useState(false);
+  const [helplines, setHelplines] = useState<any[]>([]);
+  const [helplineName, setHelplineName] = useState('');
+  const [helplinePhone, setHelplinePhone] = useState('');
+
+  // complaint/support modal states (kept lightweight to avoid large refactors)
   const [showComplaintModal, setShowComplaintModal] = useState(false);
   const [complaintForm, setComplaintForm] = useState({ title: '', description: '', image: '' });
+  const [complaints, setComplaints] = useState<any[]>([]);
 
-  // placeholder sample data (used when API calls fail)
-  const sampleAgreement = {
-    id: 'agr-1',
-    start_date: '2024-01-01',
-    end_date: '2025-01-01',
-    deposit: 50000,
-    rent: 15000,
-    file_url: '',
-  };
-  const sampleDocs = [
-    { id: 'd1', title: 'Aadhaar', file_url: '' },
-    { id: 'd2', title: 'PAN', file_url: '' },
-  ];
-  const sampleRentHistory = [
-    { id: 'r1', date: '2025-09-01', amount: 15000, status: 'paid' },
-    { id: 'r2', date: '2025-10-01', amount: 15000, status: 'due' },
-  ];
+  const [showSupportModal, setShowSupportModal] = useState(false);
+  const [supportForm, setSupportForm] = useState({ message: '', image: '' });
 
-  useEffect(() => {
-    fetchCounts();
-    fetchNotices();
-    loadLocalData();
-    // fetch owner profile if tenant
-    if (user && user.role === 'tenant') {
-      fetchOwner();
-      fetchHelplines();
-      fetchMaintenance();
-    }
-  }, []);
-
-  async function fetchMaintenance() {
+  // helper to pick a file and upload (used by complaint/support attachments)
+  async function pickFile(cb: (uri: string) => void) {
     try {
-      const r = await api.get('/api/maintenance');
-      if (r.data && r.data.maintenance) setMaintenance(r.data.maintenance);
+      const url = await pickAndUploadFile({ accept: 'image/*', fallbackApiPath: '/api/upload' });
+      if (url) cb(url);
     } catch (e) {
-      console.warn('fetch maintenance failed', e);
+      console.warn('pickFile failed', e);
     }
   }
 
-  async function fetchHelplines() {
-    try {
-      const r = await api.get('/api/tenant/helplines');
-      setHelplines(r.data.helplines || r.data || []);
-    } catch (e) {
-      console.warn('tenant fetch helplines failed', e);
-    }
-  }
-
-  async function fetchOwner() {
-    try {
-      const r = await api.get('/api/tenant/owner');
-      if (r.data && r.data.owner) setOwnerProfile(r.data.owner);
-    } catch (e) {
-      console.warn('failed to fetch owner profile', e);
-    }
-  }
-
-  function loadLocalData() {
-    setAgreements([sampleAgreement]);
-    setDocuments(sampleDocs);
-    setRentHistory(sampleRentHistory);
-    setMaintenance([]);
-    setComplaints([]);
-  }
-
-  async function fetchCounts() {
-    try {
-      const r = await api.get('/api/notices/count');
-      setNoticesCount(Number(r.data.count || 0));
-    } catch (e) {
-      /* ignore */
-    }
-  }
-
-  async function fetchNotices() {
-    try {
-      const r = await api.get('/api/notices');
-      setNotices(r.data.notices || []);
-    } catch (e) {
-      console.warn('fetch notices failed', e);
-    }
-  }
-
-  // Profile update (optimistic)
-  async function saveProfile() {
-    try {
-      await api.put('/api/user', profile); // if endpoint exists
-      alert('Profile saved');
-    } catch (e) {
-      console.warn('save profile failed', e);
-      alert('Saved locally (server call failed)');
-    }
-  }
-
-  // Document picker for support/maintenance images — uses centralized helper which
-  // provides a reliable web fallback and server multipart + base64 fallback.
-  async function pickFile(setter: (uriOrUrl: string) => void) {
-    try {
-      const url = await pickAndUploadFile({
-        accept: 'image/*',
-        fallbackApiPath: '/api/tenant/upload',
-      });
-      if (url) setter(url);
-    } catch (e) {
-      console.warn('pick failed', e);
-    }
-  }
-
-  async function submitMaintenance() {
-    try {
-      // try tenant-specific endpoint if exists, otherwise fallback to owner maintenance endpoint
-      const payload: any = {
-        title: maintenanceForm.title,
-        description: maintenanceForm.description,
-      };
-      if (maintenanceForm.image) payload.image = maintenanceForm.image;
-      // preferred tenant endpoint (may not exist) -> /api/maintenance
-      try {
-        const r = await api.post('/api/maintenance', payload);
-        setMaintenance((s) => [r.data.maintenance, ...s]);
-      } catch (err) {
-        // fallback to owner maintenance route (may be forbidden) -> /api/owner/maintenance
-        try {
-          const r2 = await api.post('/api/owner/maintenance', payload);
-          setMaintenance((s) => [r2.data.maintenance, ...s]);
-        } catch (e2) {
-          console.warn('maintenance post failed', e2);
-          setMaintenance((s) => [
-            { id: String(Date.now()), ...payload, status: 'open', raised_by: profile.id || 'me' },
-            ...s,
-          ]);
-        }
-      }
-      setShowMaintenanceModal(false);
-      setMaintenanceForm({ title: '', description: '', image: '' });
-    } catch (e) {
-      console.warn('submit maintenance failed', e);
-      alert('Failed to submit');
-    }
-  }
-
+  // submit complaint — small, robust implementation with optimistic fallback
   async function submitComplaint() {
     try {
-      const payload = { title: complaintForm.title, description: complaintForm.description };
+      const payload: any = { title: complaintForm.title, description: complaintForm.description };
+      if (complaintForm.image) payload.file_url = complaintForm.image;
       try {
-        const r = await api.post('/api/complaints', payload);
-        setComplaints((s) => [r.data.complaint, ...s]);
+        const r = await api.post('/api/tenant/maintenance', payload);
+        if (r && r.data && (r.data.complaint || r.data.maintenance)) {
+          const c = r.data.complaint || r.data.maintenance;
+          setComplaints((s) => [c, ...s]);
+        }
       } catch (err) {
-        // try owner endpoint
+        // try owner endpoint as a fallback
         try {
           const r2 = await api.post('/api/owner/maintenance', payload);
-          setComplaints((s) => [r2.data.maintenance, ...s]);
+          if (r2 && r2.data && r2.data.maintenance)
+            setComplaints((s) => [r2.data.maintenance, ...s]);
         } catch (e2) {
+          // optimistic local fallback
           setComplaints((s) => [
-            { id: String(Date.now()), ...payload, status: 'open', raised_by: profile.id || 'me' },
+            { id: String(Date.now()), ...payload, status: 'open', raised_by: profile?.id || 'me' },
             ...s,
           ]);
         }
@@ -250,7 +125,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
 
   async function submitSupport() {
     try {
-      const payload = { message: supportForm.message };
+      const payload: any = { message: supportForm.message };
       try {
         await api.post('/api/support', payload);
         alert('Support request sent');
@@ -264,6 +139,144 @@ export default function TenantScreen({ user, onLogout }: Props) {
     }
   }
 
+  useEffect(() => {
+    fetchCounts();
+    fetchNotices();
+    loadLocalData();
+    fetchDocuments();
+    if (user && user.role === 'tenant') fetchOwner();
+  }, []);
+
+  async function fetchDocuments() {
+    try {
+      const r = await api.get('/api/tenant/documents');
+      if (r && r.data && Array.isArray(r.data.documents)) setDocuments(r.data.documents || []);
+    } catch (e) {
+      console.warn('fetch tenant documents failed', e);
+    }
+  }
+
+  async function fetchOwner() {
+    try {
+      const r = await api.get('/api/tenant/owner');
+      if (r && r.data && r.data.owner) setOwnerProfile(r.data.owner);
+    } catch (e) {
+      console.warn('failed to fetch owner profile', e);
+    }
+  }
+
+  // placeholder sample data
+  const sampleAgreement = {
+    id: 'agr-1',
+    start_date: '2024-01-01',
+    end_date: '2025-01-01',
+    deposit: 50000,
+    rent: 15000,
+    file_url: '',
+  };
+
+  async function fetchCounts() {
+    try {
+      const r = await api.get('/api/notices/count');
+    } catch (e) {}
+  }
+  async function fetchNotices() {
+    try {
+      const r = await api.get('/api/notices');
+    } catch (e) {}
+  }
+
+  function loadLocalData() {
+    setDocuments([
+      { id: 'd1', title: 'Aadhaar', file_url: '' },
+      { id: 'd2', title: 'PAN', file_url: '' },
+    ]);
+  }
+
+  // profile save helper used by the Save button
+  async function saveProfile() {
+    try {
+      const payload = {
+        name: profile?.name,
+        phone: profile?.phone,
+        address: profile?.address,
+      };
+      const r = await api.put('/api/user', payload);
+      // if server returned updated user, update local profile and persisted storage so reloads show latest avatar
+      if (r && r.data && r.data.user) {
+        setProfile(r.data.user);
+        try {
+          await AsyncStorage.setItem('user', JSON.stringify(r.data.user));
+        } catch (e) {
+          console.warn('failed to persist user in AsyncStorage', e);
+        }
+      }
+      alert('Profile saved');
+    } catch (e) {
+      console.warn('saveProfile failed', e);
+      alert('Save failed');
+    }
+  }
+
+  // maintenance helpers (lightweight placeholders)
+  const [maintenanceForm, setMaintenanceForm] = useState({ title: '', description: '', image: '' });
+  const [proofUri, setProofUri] = useState<string | null>(null);
+
+  async function fetchMaintenance() {
+    try {
+      const r = await api.get('/api/tenant/maintenance');
+      if (r && r.data && Array.isArray(r.data.maintenance)) setMaintenance(r.data.maintenance);
+    } catch (e) {
+      console.warn('fetch maintenance failed', e);
+    }
+  }
+
+  async function submitMaintenance() {
+    try {
+      const payload: any = {
+        title: maintenanceForm.title,
+        description: maintenanceForm.description,
+      };
+      if (maintenanceForm.image) payload.file_url = maintenanceForm.image;
+      try {
+        const r = await api.post('/api/tenant/maintenance', payload);
+        if (r && r.data && r.data.maintenance)
+          setMaintenance((s) => [r.data.maintenance, ...(s || [])]);
+      } catch (err) {
+        console.warn('submitMaintenance failed', err);
+        // optimistic fallback
+        setMaintenance((s) => [
+          { id: String(Date.now()), ...payload, status: 'open' },
+          ...(s || []),
+        ]);
+      }
+      setShowMaintenanceModal(false);
+      setMaintenanceForm({ title: '', description: '', image: '' });
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+
+  async function saveDocumentToServer(payload: any, tempId?: string) {
+    try {
+      const r = await api.post('/api/tenant/documents', payload);
+      if (r && r.data && r.data.document) {
+        const saved = r.data.document;
+        setDocuments((s) => {
+          const arr = (s || []).filter((x: any) => x.id !== tempId && x.id !== saved.id);
+          return [saved, ...arr];
+        });
+        return saved;
+      }
+    } catch (e) {
+      console.warn('save document failed', e);
+      try {
+        await fetchDocuments();
+      } catch (err) {}
+    }
+    return null;
+  }
+
   // small render helpers
   const StatCard = ({ title, value, icon }: any) => (
     <View style={styles.statCard}>
@@ -273,6 +286,48 @@ export default function TenantScreen({ user, onLogout }: Props) {
         </View>
         <Text style={styles.statTitle}>{title}</Text>
       </View>
+
+      {/* Inline preview overlay for Tenant profile */}
+      {showPreviewModal && (
+        <View
+          style={{
+            position: 'absolute',
+            top: 12,
+            left: 12,
+            right: 12,
+            bottom: 12,
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            borderRadius: 10,
+            padding: 12,
+          }}
+        >
+          {previewImageUrl ? (
+            <Image
+              source={{ uri: previewImageUrl }}
+              style={{
+                width: '100%',
+                height: '80%',
+                resizeMode: 'contain',
+                backgroundColor: '#000',
+              }}
+            />
+          ) : (
+            <Text style={{ color: '#fff' }}>No preview available</Text>
+          )}
+          <View style={{ marginTop: 8 }}>
+            <Button
+              title="Close"
+              onPress={() => {
+                setShowPreviewModal(false);
+                setPreviewImageUrl(null);
+              }}
+            />
+          </View>
+        </View>
+      )}
       <Text style={styles.statValue}>{value}</Text>
     </View>
   );
@@ -500,8 +555,28 @@ export default function TenantScreen({ user, onLogout }: Props) {
                         try {
                           const url = await pickAndUploadProfile();
                           if (!url) return; // user cancelled
-                          await api.put('/api/user', { avatar: url });
-                          setProfile((p: any) => ({ ...(p || {}), avatar: url }));
+                          const res = await api.put('/api/user', { avatar: url });
+                          if (res && res.data && res.data.user) {
+                            setProfile(res.data.user);
+                            try {
+                              await AsyncStorage.setItem('user', JSON.stringify(res.data.user));
+                            } catch (e) {
+                              console.warn('failed to persist user in AsyncStorage', e);
+                            }
+                          } else {
+                            // optimistic fallback
+                            setProfile((p: any) => ({ ...(p || {}), avatar: url }));
+                            try {
+                              const raw = await AsyncStorage.getItem('user');
+                              if (raw) {
+                                const parsed = JSON.parse(raw);
+                                const merged = { ...(parsed || {}), avatar: url };
+                                await AsyncStorage.setItem('user', JSON.stringify(merged));
+                              }
+                            } catch (e) {
+                              /* ignore */
+                            }
+                          }
                           alert('Profile photo updated');
                         } catch (e) {
                           console.warn('upload profile failed', e);
@@ -534,27 +609,84 @@ export default function TenantScreen({ user, onLogout }: Props) {
                     {/* Tenant documents shown in profile tab (parity with Owner/Admin profile view) */}
                     <View style={{ marginTop: 12 }}>
                       <Text style={[styles.sectionTitle, { marginBottom: 8 }]}>
-                        Uploaded Documents
+                        Upload Document
                       </Text>
-                      {documents && documents.length > 0 ? (
-                        documents.map((d: any) => (
+                      {(() => {
+                        // dedupe by title so Aadhaar/PAN don't appear multiple times
+                        const seen = new Set<string>();
+                        const deduped = (documents || []).filter((d: any) => {
+                          const key = String((d.title || d.name || '').toLowerCase()).trim();
+                          if (!key) return false;
+                          if (seen.has(key)) return false;
+                          seen.add(key);
+                          return true;
+                        });
+                        if (!deduped || deduped.length === 0)
+                          return <Text style={styles.muted}>No documents uploaded</Text>;
+
+                        return deduped.map((d: any) => (
                           <View key={d.id} style={styles.listItem}>
                             <View style={{ flex: 1 }}>
                               <Text style={styles.listTitle}>
                                 {d.title || d.name || 'Document'}
                               </Text>
-                              {d.file_url ? <Text style={styles.listSub}>{d.file_url}</Text> : null}
                             </View>
-                            <TouchableOpacity
-                              onPress={() => alert('Open: ' + (d.file_url || d.uri || ''))}
-                            >
-                              <Text style={styles.link}>View</Text>
-                            </TouchableOpacity>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                              <TouchableOpacity
+                                style={{ padding: 8 }}
+                                onPress={async () => {
+                                  try {
+                                    setUploadingDocId(d.id);
+                                    const url = await pickAndUploadFile({
+                                      accept: '*/*',
+                                      fallbackApiPath: '/api/tenant/upload',
+                                    });
+                                    if (!url) return;
+                                    // optimistic update
+                                    setDocuments((s) =>
+                                      (s || []).map((x: any) =>
+                                        x.id === d.id ? { ...x, file_url: url } : x
+                                      )
+                                    );
+                                    // persist to backend and prefer server-returned document when available
+                                    await saveDocumentToServer(
+                                      {
+                                        title: d.title || d.name || 'Document',
+                                        file_url: url,
+                                        userId: profile?.id,
+                                      },
+                                      d.id
+                                    );
+                                  } catch (e) {
+                                    console.warn('upload failed', e);
+                                    alert('Upload failed');
+                                  } finally {
+                                    setUploadingDocId(null);
+                                  }
+                                }}
+                              >
+                                {uploadingDocId === d.id ? (
+                                  <ActivityIndicator size="small" />
+                                ) : (
+                                  <Ionicons name="cloud-upload-outline" size={20} color="#2563eb" />
+                                )}
+                              </TouchableOpacity>
+
+                              {d && d.file_url ? (
+                                <TouchableOpacity
+                                  style={{ padding: 8, marginLeft: 6 }}
+                                  onPress={() => {
+                                    setPreviewImageUrl(d.file_url || d.uri || null);
+                                    setShowPreviewModal(true);
+                                  }}
+                                >
+                                  <Ionicons name="eye-outline" size={20} color="#2563eb" />
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
                           </View>
-                        ))
-                      ) : (
-                        <Text style={styles.muted}>No documents uploaded</Text>
-                      )}
+                        ));
+                      })()}
                     </View>
                   </View>
                 )}
@@ -1147,6 +1279,37 @@ export default function TenantScreen({ user, onLogout }: Props) {
           </>
         )}
       </View>
+
+      {/* Preview modal (global) - shows uploaded document image/pdf preview when eye icon clicked */}
+      <Modal visible={showPreviewModal} animationType="fade" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContent, { alignItems: 'center' }]}>
+            {previewImageUrl ? (
+              // Image will display common image URLs or data URLs. For PDFs/other types the browser may not render.
+              <Image
+                source={{ uri: previewImageUrl }}
+                style={{
+                  width: '100%',
+                  height: 400,
+                  resizeMode: 'contain',
+                  backgroundColor: '#000',
+                }}
+              />
+            ) : (
+              <Text style={{ textAlign: 'center' }}>No preview available</Text>
+            )}
+            <View style={{ marginTop: 8 }}>
+              <Button
+                title="Close"
+                onPress={() => {
+                  setShowPreviewModal(false);
+                  setPreviewImageUrl(null);
+                }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Bottom tab (mobile) - intercept 'tenants' key so owner users open Owner dashboard
           Previously the shared BottomTab could emit a 'tenants' key which TenantScreen did not handle

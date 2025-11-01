@@ -19,7 +19,6 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 // BottomTab removed for OwnerScreen (we render an inline bottom bar here)
 import ProfileCard from '../components/ProfileCard';
-import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import api, { setAuthHeader, attachErrorHandler } from '../services/api';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
@@ -247,10 +246,24 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
   // Document upload state
   const [propertyDocs, setPropertyDocs] = useState<any[]>([]);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [uploadingPropertyDoc, setUploadingPropertyDoc] = useState(false);
+  const [uploadingProof, setUploadingProof] = useState<Record<string, boolean>>({});
+  const [deletingTenantField, setDeletingTenantField] = useState<string | null>(null);
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [flats, setFlats] = useState<any[]>([]);
+  // Tenant / filter UI state
+  const [tenantQ, setTenantQ] = useState('');
+  const [tenantFilter, setTenantFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [noticesCount, setNoticesCount] = useState<number>(0);
   const [noticesList, setNoticesList] = useState<any[]>([]);
   const [showNoticesModal, setShowNoticesModal] = useState(false);
+  // Helplines state (missing previously and caused ReferenceError when OwnerScreen referenced showHelplineModal)
+  const [showHelplineModal, setShowHelplineModal] = useState(false);
+  const [helplines, setHelplines] = useState<any[]>([]);
+  const [helplineName, setHelplineName] = useState('');
+  const [helplinePhone, setHelplinePhone] = useState('');
   // Owner-level complaint & bills modals
   const [showOwnerComplaintModal, setShowOwnerComplaintModal] = useState(false);
   const [ownerComplaintForm, setOwnerComplaintForm] = useState({
@@ -269,52 +282,49 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
     (user as any)?.avatar || (user as any)?.image
   );
-  const [helplines, setHelplines] = useState<any[]>([]);
-  const [showHelplineModal, setShowHelplineModal] = useState(false);
-  const [helplineName, setHelplineName] = useState('');
-  const [helplinePhone, setHelplinePhone] = useState('');
 
-  // Filters and search
-  const [tenantFilter, setTenantFilter] = useState<'all' | 'active' | 'inactive'>('all');
-  const [tenantQ, setTenantQ] = useState('');
-
+  // Derived tenant lists / due map
   const filteredTenants = useMemo(() => {
-    const q = tenantQ.trim().toLowerCase();
-    return tenants.filter((t) => {
-      if (tenantFilter === 'active' && t.status !== 'active') return false;
-      if (tenantFilter === 'inactive' && t.status !== 'inactive') return false;
-      if (!q) return true;
-      return (t.name || '').toLowerCase().includes(q) || (t.phone || '').includes(q);
-    });
-  }, [tenants, tenantFilter, tenantQ]);
-
-  // per-tenant outstanding amount map (sum of open/payment_pending bills assigned to tenant)
-  const tenantDueMap = useMemo(() => {
-    const m: Record<string, number> = {};
-    (bills || []).forEach((b: any) => {
-      const assigned = b && (b.assigned_to || b.assignedTo || b.tenantId || b.assignedToId);
-      if (!assigned) return;
-      const status = (b.status || '').toString().toLowerCase();
-      if (status === 'closed') return; // skip closed bills
-      m[assigned] = (m[assigned] || 0) + (Number(b.cost) || 0);
-    });
-    return m;
-  }, [bills]);
-
-  // grouped tenant lists
-  const activeTenants = useMemo(() => tenants.filter((t) => t.status === 'active'), [tenants]);
-  const inactiveTenants = useMemo(() => tenants.filter((t) => t.status !== 'active'), [tenants]);
-
-  async function refreshTenants() {
-    try {
-      const r = await api.get('/api/owner/tenants');
-      if (r.data && r.data.users) setTenants(r.data.users.map((u: any) => clientShapeFromApi(u)));
-    } catch (e: any) {
-      console.warn(
-        'refresh tenants failed',
-        e && ((e as any).response?.data || (e as any).message || e)
+    let list = (tenants || []).slice();
+    if (tenantFilter === 'active') list = list.filter((t) => t.status === 'active');
+    if (tenantFilter === 'inactive') list = list.filter((t) => t.status !== 'active');
+    if (tenantQ && String(tenantQ).trim()) {
+      const q = String(tenantQ).toLowerCase();
+      list = list.filter(
+        (t) => (t.name || '').toString().toLowerCase().includes(q) || (t.phone || '').includes(q)
       );
     }
+    return list;
+  }, [tenants, tenantFilter, tenantQ]);
+
+  const activeTenants = useMemo(
+    () => filteredTenants.filter((t) => t.status === 'active'),
+    [filteredTenants]
+  );
+  const inactiveTenants = useMemo(
+    () => filteredTenants.filter((t) => t.status !== 'active'),
+    [filteredTenants]
+  );
+
+  const tenantDueMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    const allBills = [...(tenantBills || []), ...(myBills || [])];
+    (allBills || []).forEach((b: any) => {
+      const tid = b.tenantId || (b.tenant && b.tenant.id);
+      if (!tid) return;
+      const closed = String(b.status || '').toLowerCase() === 'closed';
+      if (closed) return;
+      map[tid] = (map[tid] || 0) + (Number(b.cost) || 0);
+    });
+    return map;
+  }, [tenantBills, myBills]);
+
+  // helper to open preview: on web open in new tab for reliability, on native show inline modal
+  function handlePreview(url?: string | null) {
+    if (!url) return;
+    // Always show inline preview modal (do not open a new window/tab)
+    setPreviewImageUrl(url);
+    setShowPreviewModal(true);
   }
 
   const stats = useMemo(
@@ -358,6 +368,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
   async function pickPropertyDoc() {
     try {
+      setUploadingPropertyDoc(true);
       const url = await pickAndUploadFile({ accept: '*/*', fallbackApiPath: '/api/owner/upload' });
       if (!url) return;
       const newDoc = {
@@ -383,6 +394,41 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       }
     } catch (e: any) {
       console.warn('pick property doc failed', e && ((e as any).response?.data || e.message));
+    } finally {
+      setUploadingPropertyDoc(false);
+    }
+  }
+
+  // helper: upload property/doc with a friendly tag title (Aadhaar/PAN)
+  async function uploadPropertyDocAs(tagTitle: string) {
+    try {
+      setUploadingPropertyDoc(true);
+      const url = await pickAndUploadFile({ accept: '*/*', fallbackApiPath: '/api/owner/upload' });
+      if (!url) return;
+      const newDoc = {
+        id: String(Date.now()),
+        name: tagTitle,
+        uri: url,
+        file_url: url,
+        uploadedAt: new Date().toISOString(),
+      } as any;
+      setPropertyDocs((s) => [newDoc, ...(s || [])]);
+      try {
+        await api.post('/api/owner/documents', {
+          title: tagTitle,
+          file_url: url,
+          file_type: 'application/octet-stream',
+        });
+      } catch (e: any) {
+        console.warn(
+          'create document record failed',
+          e && ((e as any).response?.data || e.message)
+        );
+      }
+    } catch (e: any) {
+      console.warn('uploadPropertyDocAs failed', e);
+    } finally {
+      setUploadingPropertyDoc(false);
     }
   }
 
@@ -462,9 +508,11 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       address: t.address,
       gender: t.gender ? String(t.gender).toLowerCase() : null,
       move_in: t.moveIn ? new Date(t.moveIn).toISOString() : null,
-      move_out: t.moveOut ? new Date(t.moveOut).toISOString() : null,
+      // move_out intentionally omitted per new UX
       rent: t.rent ? Number(t.rent) : null,
       deposit: t.deposit ? Number(t.deposit) : null,
+      aadhaar_url: t.aadhaar_url || undefined,
+      pan_url: t.pan_url || undefined,
       family: Array.isArray(t.family)
         ? t.family
             .map((f: any) => ({ name: f && f.name ? String(f.name).trim() : '' }))
@@ -490,8 +538,27 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   function saveTenant(t: any) {
     (async () => {
       try {
-        // Client-side validation: phone must be exactly 10 digits
+        // Client-side validation: required fields
+        const name = t && t.name ? String(t.name).trim() : '';
         const phone = t && t.phone ? String(t.phone).trim() : '';
+        const address = t && t.address ? String(t.address).trim() : '';
+        const gender = t && t.gender ? String(t.gender).trim() : '';
+        const moveIn = t && t.moveIn ? String(t.moveIn).trim() : '';
+        const rentVal = t && (t.rent || t.rent === 0) ? t.rent : null;
+        const depositVal = t && (t.deposit || t.deposit === 0) ? t.deposit : null;
+
+        if (
+          !name ||
+          !phone ||
+          !address ||
+          !gender ||
+          !moveIn ||
+          rentVal === null ||
+          depositVal === null
+        ) {
+          Alert.alert('Validation', 'Please fill all required fields marked with *');
+          return;
+        }
         if (!/^[0-9]{10}$/.test(phone)) {
           setEditingPhoneError('Please enter a valid 10-digit mobile number');
           return;
@@ -1266,10 +1333,15 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                         <View style={{ height: 8 }} />
                         <TouchableOpacity
                           style={styles.smallBtn}
+                          disabled={!!uploadingProof[item.id]}
                           onPress={async () => {
                             try {
+                              setUploadingProof((s) => ({ ...(s || {}), [item.id]: true }));
                               // Use centralized picker+uploader which works on web (file input) and native
-                              const url = await pickAndUploadFile({ accept: '*/*', fallbackApiPath: '/api/owner/upload' });
+                              const url = await pickAndUploadFile({
+                                accept: '*/*',
+                                fallbackApiPath: '/api/owner/upload',
+                              });
                               if (!url) return alert('Upload failed');
                               // call mark-paid endpoint (same as tenant flow) to set payment_proof_url
                               const r = await api.post(`/api/bills/${item.id}/mark-paid`, {
@@ -1278,16 +1350,24 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                               const updated = r.data && r.data.bill;
                               if (updated) {
                                 // update local list
-                                setMyBills((s) => s.map((it) => (it.id === updated.id ? updated : it)));
+                                setMyBills((s) =>
+                                  s.map((it) => (it.id === updated.id ? updated : it))
+                                );
                                 alert('Payment proof submitted. Verification pending.');
                               } else alert('Submitted');
                             } catch (e) {
                               console.warn('upload proof failed', e);
                               alert('Failed to upload proof');
+                            } finally {
+                              setUploadingProof((s) => ({ ...(s || {}), [item.id]: false }));
                             }
                           }}
                         >
-                          <Text style={{ color: '#fff' }}>Upload Proof</Text>
+                          {uploadingProof[item.id] ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Text style={{ color: '#fff' }}>Upload Proof</Text>
+                          )}
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -1302,21 +1382,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 ]}
               >
                 <Text style={styles.sectionTitle}>Tenant Bills (raised by you)</Text>
-                <TouchableOpacity
-                  style={styles.smallBtn}
-                  onPress={() =>
-                    createBill({
-                      title: 'New Bill',
-                      type: 'other',
-                      description: '',
-                      cost: 0,
-                      date: new Date().toISOString().slice(0, 10),
-                      status: 'pending',
-                    })
-                  }
-                >
-                  <Text style={{ color: '#fff' }}>New Bill</Text>
-                </TouchableOpacity>
+                {/* New Bill action removed per UI request */}
               </View>
               {tenantBills.length === 0 ? (
                 <View style={{ padding: 12 }}>
@@ -1355,8 +1421,16 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 }}
               >
                 <Text style={styles.sectionTitle}>Property Documents</Text>
-                <TouchableOpacity style={styles.smallBtn} onPress={pickPropertyDoc}>
-                  <Text style={{ color: '#fff' }}>Upload</Text>
+                <TouchableOpacity
+                  style={styles.smallBtn}
+                  onPress={pickPropertyDoc}
+                  disabled={uploadingPropertyDoc}
+                >
+                  {uploadingPropertyDoc ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={{ color: '#fff' }}>Upload</Text>
+                  )}
                 </TouchableOpacity>
               </View>
               {propertyDocs.length === 0 ? (
@@ -1425,14 +1499,18 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               <Text style={{ fontWeight: '700', fontSize: 18, marginBottom: 8 }}>
                 {editingReadOnly ? 'View Tenant' : editingTenant?.id ? 'Edit Tenant' : 'Add Tenant'}
               </Text>
-              <Text style={styles.label}>Full name</Text>
+              <Text style={styles.label}>
+                Full name <Text style={{ color: '#d00' }}>*</Text>
+              </Text>
               <TextInput
                 style={styles.input}
                 value={editingTenant?.name}
                 onChangeText={(t) => setEditingTenant((s: any) => ({ ...s, name: t }))}
                 editable={!editingReadOnly}
               />
-              <Text style={styles.label}>Mobile</Text>
+              <Text style={styles.label}>
+                Mobile <Text style={{ color: '#d00' }}>*</Text>
+              </Text>
               <TextInput
                 style={styles.input}
                 value={editingTenant?.phone}
@@ -1447,14 +1525,18 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               {editingPhoneError ? (
                 <Text style={styles.inlineError}>{editingPhoneError}</Text>
               ) : null}
-              <Text style={styles.label}>Address</Text>
+              <Text style={styles.label}>
+                Address <Text style={{ color: '#d00' }}>*</Text>
+              </Text>
               <TextInput
                 style={styles.input}
                 value={editingTenant?.address}
                 onChangeText={(t) => setEditingTenant((s: any) => ({ ...s, address: t }))}
                 editable={!editingReadOnly}
               />
-              <Text style={styles.label}>Gender</Text>
+              <Text style={styles.label}>
+                Gender <Text style={{ color: '#d00' }}>*</Text>
+              </Text>
               <View style={{ flexDirection: 'row', marginBottom: 8 }}>
                 {['Male', 'Female', 'Other'].map((g) => {
                   const lower = (g || '').toLowerCase();
@@ -1513,7 +1595,9 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   <Text style={{ color: '#666', marginTop: 6 }}>No family members</Text>
                 ) : null}
               </View>
-              <Text style={styles.label}>Move-in date</Text>
+              <Text style={styles.label}>
+                Move-in date <Text style={{ color: '#d00' }}>*</Text>
+              </Text>
               <View style={styles.inputWithIcon}>
                 <TextInput
                   style={[styles.input, { paddingRight: 44 }]}
@@ -1537,32 +1621,12 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.label}>Move-out date</Text>
-              <View style={styles.inputWithIcon}>
-                <TextInput
-                  style={[styles.input, { paddingRight: 44 }]}
-                  value={editingTenant?.moveOut}
-                  onChangeText={(t) => setEditingTenant((s: any) => ({ ...s, moveOut: t }))}
-                  placeholder="YYYY-MM-DD"
-                  editable={!editingReadOnly}
-                />
-                <TouchableOpacity
-                  style={styles.calendarIcon}
-                  onPress={() => {
-                    if (editingReadOnly) return;
-                    const d = editingTenant?.moveOut ? new Date(editingTenant.moveOut) : new Date();
-                    setCalendarMonth(d.getMonth());
-                    setCalendarYear(d.getFullYear());
-                    setDatePickerField('moveOut');
-                    setShowDatePicker(true);
-                  }}
-                >
-                  <Ionicons name="calendar" size={20} color="#333" />
-                </TouchableOpacity>
-              </View>
+              {/* Move-out date removed as per design */}
               {/* Date picker (conditionally rendered if library is present) */}
               {renderDatePicker() || renderInlineCalendar()}
-              <Text style={styles.label}>Rent amount</Text>
+              <Text style={styles.label}>
+                Rent amount <Text style={{ color: '#d00' }}>*</Text>
+              </Text>
               <TextInput
                 style={styles.input}
                 value={String(editingTenant?.rent || '')}
@@ -1593,7 +1657,9 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   />
                 </View>
               </View>
-              <Text style={styles.label}>Deposit amount</Text>
+              <Text style={styles.label}>
+                Deposit amount <Text style={{ color: '#d00' }}>*</Text>
+              </Text>
               <TextInput
                 style={styles.input}
                 value={String(editingTenant?.deposit || '')}
@@ -1601,39 +1667,218 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 keyboardType="numeric"
                 editable={!editingReadOnly}
               />
+              {/* Aadhaar / PAN uploads for tenant (owner can attach documents that tenant can view) */}
+              <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Identity Documents</Text>
+              <View style={{ flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 8 }}>
+                {/* Aadhaar */}
+                <View
+                  style={{
+                    flex: 1,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <Text>Aadhaar</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    {editingTenant?.aadhaar_url ? (
+                      <TouchableOpacity
+                        style={{ padding: 8 }}
+                        onPress={() => handlePreview(editingTenant.aadhaar_url)}
+                      >
+                        <Ionicons name="eye-outline" size={20} color="#2563eb" />
+                      </TouchableOpacity>
+                    ) : null}
+                    {!editingReadOnly && (
+                      <TouchableOpacity
+                        style={{ padding: 8, marginLeft: 6 }}
+                        onPress={async () => {
+                          try {
+                            const url = await pickAndUploadFile({
+                              accept: '*/*',
+                              fallbackApiPath: '/api/owner/upload',
+                            });
+                            if (!url) return;
+                            setEditingTenant((s: any) => ({ ...s, aadhaar_url: url }));
+                          } catch (e) {
+                            console.warn('aadhaar upload failed', e);
+                            alert('Upload failed');
+                          }
+                        }}
+                      >
+                        <Ionicons name="cloud-upload-outline" size={20} color="#2563eb" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+
+                {/* PAN */}
+                <View
+                  style={{
+                    flex: 1,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <Text>PAN</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    {editingTenant?.pan_url ? (
+                      <TouchableOpacity
+                        style={{ padding: 8 }}
+                        onPress={() => {
+                          setPreviewImageUrl(editingTenant.pan_url);
+                          setShowPreviewModal(true);
+                        }}
+                      >
+                        <Ionicons name="eye-outline" size={20} color="#2563eb" />
+                      </TouchableOpacity>
+                    ) : null}
+                    {!editingReadOnly && (
+                      <TouchableOpacity
+                        style={{ padding: 8, marginLeft: 6 }}
+                        onPress={async () => {
+                          try {
+                            const url = await pickAndUploadFile({
+                              accept: '*/*',
+                              fallbackApiPath: '/api/owner/upload',
+                            });
+                            if (!url) return;
+                            setEditingTenant((s: any) => ({ ...s, pan_url: url }));
+                          } catch (e) {
+                            console.warn('pan upload failed', e);
+                            alert('Upload failed');
+                          }
+                        }}
+                      >
+                        <Ionicons name="cloud-upload-outline" size={20} color="#2563eb" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+              </View>
               {/* Tenant history: agreements & documents (owner-scoped) */}
               {editingTenant?.history && (
                 <>
-                  <Text style={[styles.sectionTitle, { marginTop: 12 }]}>History</Text>
-                  {/* Agreements */}
-                  {Array.isArray(editingTenant.history.agreements) &&
-                    editingTenant.history.agreements.length > 0 && (
-                      <View style={{ marginBottom: 8 }}>
-                        <Text style={{ fontWeight: '700', marginBottom: 6 }}>Agreements</Text>
-                        {editingTenant.history.agreements.map((a: any) => (
-                          <View key={a.id} style={{ paddingVertical: 6 }}>
-                            <Text>Agreement ID: {a.id}</Text>
-                            {a.file_url ? (
-                              <Text style={styles.tenantMeta}>{a.file_url}</Text>
+                  <Text style={[styles.sectionTitle, { marginTop: 12 }]}>History Documents</Text>
+                  <View style={{ marginBottom: 8 }}>
+                    {(() => {
+                      // Only show documents that were uploaded by the current owner
+                      const docs = Array.isArray(editingTenant.history?.documents)
+                        ? editingTenant.history.documents
+                        : [];
+                      const ownerId = user && (user.id || user.userId || user._id);
+                      const tenantId = editingTenant && (editingTenant.id || editingTenant._id);
+                      // Show documents uploaded by the owner OR documents associated with this tenant
+                      const visibleDocs = docs.filter((d: any) => {
+                        if (!d) return false;
+                        const upl = d.uploaded_by || d.uploadedBy || d.uploadedById || null;
+                        return (
+                          (ownerId && String(upl) === String(ownerId)) ||
+                          (tenantId && String(upl) === String(tenantId))
+                        );
+                      });
+
+                      if (visibleDocs.length === 0) {
+                        return (
+                          <View style={{ paddingVertical: 8 }}>
+                            <Text style={{ color: '#666' }}>No history documents uploaded.</Text>
+                          </View>
+                        );
+                      }
+
+                      return visibleDocs.map((item: any) => (
+                        <View
+                          key={item.id}
+                          style={{
+                            paddingVertical: 6,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <View>
+                            <Text>{item.title || item.name || 'Document'}</Text>
+                            <Text style={styles.tenantMeta}>{item.createdAt || ''}</Text>
+                          </View>
+
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            {item.file_url ? (
+                              <TouchableOpacity
+                                onPress={() => handlePreview(item.file_url)}
+                                style={{ padding: 6 }}
+                              >
+                                <Ionicons name="eye-outline" size={18} color="#374151" />
+                              </TouchableOpacity>
                             ) : null}
-                            <Text style={styles.tenantMeta}>{a.start_date || a.createdAt}</Text>
+
+                            {!editingReadOnly && item.file_url ? (
+                              <TouchableOpacity
+                                style={{ padding: 6, marginLeft: 8 }}
+                                accessibilityRole="button"
+                                onPress={async () => {
+                                  try {
+                                    let confirmed = false;
+                                    if (
+                                      Platform.OS === 'web' &&
+                                      typeof window !== 'undefined' &&
+                                      window.confirm
+                                    ) {
+                                      confirmed = window.confirm(
+                                        'Are you sure you want to delete this document?'
+                                      );
+                                    } else {
+                                      await new Promise<void>((resolve) => {
+                                        Alert.alert(
+                                          'Delete document',
+                                          'Are you sure you want to delete this document?',
+                                          [
+                                            {
+                                              text: 'Cancel',
+                                              style: 'cancel',
+                                              onPress: () => resolve(),
+                                            },
+                                            {
+                                              text: 'Delete',
+                                              style: 'destructive',
+                                              onPress: () => {
+                                                (confirmed as any) = true;
+                                                resolve();
+                                              },
+                                            },
+                                          ]
+                                        );
+                                      });
+                                    }
+                                    if (!confirmed) return;
+                                    setDeletingDocId(item.id);
+                                    await api.delete(`/api/owner/documents/${item.id}`);
+                                    try {
+                                      const r = await api.get(
+                                        `/api/owner/tenants/${editingTenant.id}/history`
+                                      );
+                                      setEditingTenant((s: any) => ({ ...s, history: r.data }));
+                                    } catch (e) {}
+                                  } catch (e) {
+                                    console.warn('delete document failed', e);
+                                    Alert.alert('Delete failed');
+                                  } finally {
+                                    setDeletingDocId(null);
+                                  }
+                                }}
+                              >
+                                {deletingDocId === item.id ? (
+                                  <ActivityIndicator size="small" color="#dc2626" />
+                                ) : (
+                                  <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                                )}
+                              </TouchableOpacity>
+                            ) : null}
                           </View>
-                        ))}
-                      </View>
-                    )}
-                  {/* Documents uploaded by tenant */}
-                  {Array.isArray(editingTenant.history.documents) &&
-                    editingTenant.history.documents.length > 0 && (
-                      <View style={{ marginBottom: 8 }}>
-                        <Text style={{ fontWeight: '700', marginBottom: 6 }}>Documents</Text>
-                        {editingTenant.history.documents.map((d: any) => (
-                          <View key={d.id} style={{ paddingVertical: 6 }}>
-                            <Text>{d.title || d.file_type}</Text>
-                            <Text style={styles.tenantMeta}>{d.file_url}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    )}
+                        </View>
+                      ));
+                    })()}
+                  </View>
                 </>
               )}
               <View style={{ height: 12 }} />
@@ -1804,33 +2049,87 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 } catch (e) {}
               }}
             />
-            {/* Aadhaar / ID documents if available */}
+            {/* Aadhaar / ID documents if available (show view/upload buttons) */}
             <View style={{ marginTop: 12 }}>
               <Text style={{ fontWeight: '700' }}>Aadhaar / ID</Text>
-              {propertyDocs && propertyDocs.length > 0 ? (
-                propertyDocs.filter(
-                  (d) =>
-                    (d.name || '').toLowerCase().includes('aadhaar') ||
-                    (d.title || '').toLowerCase().includes('aadhaar')
-                ).length > 0 ? (
-                  propertyDocs
-                    .filter(
-                      (d) =>
-                        (d.name || '').toLowerCase().includes('aadhaar') ||
-                        (d.title || '').toLowerCase().includes('aadhaar')
+              {(() => {
+                const findDoc = (regex: RegExp) =>
+                  (propertyDocs || []).find((d: any) =>
+                    Boolean(
+                      (d.name && regex.test(String(d.name))) ||
+                        (d.title && regex.test(String(d.title))) ||
+                        (d.file_url && regex.test(String(d.file_url)))
                     )
-                    .map((d) => (
-                      <View key={d.id} style={{ paddingVertical: 6 }}>
-                        <Text>{d.name || d.title}</Text>
-                        <Text style={styles.tenantMeta}>{d.file_url || d.uri}</Text>
-                      </View>
-                    ))
-                ) : (
-                  <Text style={{ color: '#666', marginTop: 6 }}>Aadhaar not uploaded</Text>
-                )
-              ) : (
-                <Text style={{ color: '#666', marginTop: 6 }}>No documents uploaded</Text>
-              )}
+                  );
+                const aadhaar = findDoc(/aadhaar|aadhar/i);
+                const pan = findDoc(/\bpan\b/i);
+
+                return (
+                  <>
+                    <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                      {aadhaar ? (
+                        <TouchableOpacity
+                          style={[
+                            styles.smallBtnClose,
+                            { flexDirection: 'row', alignItems: 'center' },
+                          ]}
+                          onPress={() => handlePreview(aadhaar.file_url || aadhaar.uri || null)}
+                        >
+                          <Ionicons name="eye-outline" size={16} color="#374151" />
+                          <Text style={{ marginLeft: 8 }}>View Aadhaar Card</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.smallBtn}
+                          onPress={() => uploadPropertyDocAs('Aadhaar')}
+                          disabled={uploadingPropertyDoc}
+                        >
+                          {uploadingPropertyDoc ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <>
+                              <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
+                              <Text style={{ color: '#fff', marginLeft: 8 }}>Upload Aadhaar</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      )}
+
+                      {pan ? (
+                        <TouchableOpacity
+                          style={[
+                            styles.smallBtnClose,
+                            { flexDirection: 'row', alignItems: 'center' },
+                          ]}
+                          onPress={() => handlePreview(pan.file_url || pan.uri || null)}
+                        >
+                          <Ionicons name="eye-outline" size={16} color="#374151" />
+                          <Text style={{ marginLeft: 8 }}>View PAN Card</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.smallBtn}
+                          onPress={() => uploadPropertyDocAs('PAN')}
+                          disabled={uploadingPropertyDoc}
+                        >
+                          {uploadingPropertyDoc ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <>
+                              <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
+                              <Text style={{ color: '#fff', marginLeft: 8 }}>Upload PAN</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    {/* Fallback message */}
+                    {(propertyDocs || []).length === 0 ? (
+                      <Text style={{ color: '#666', marginTop: 6 }}>No documents uploaded</Text>
+                    ) : null}
+                  </>
+                );
+              })()}
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
               {/* Dev helper: test backend connectivity from the client (visible in dev builds) */}
@@ -1862,6 +2161,72 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 }}
               >
                 <Text style={{ color: '#fff' }}>Logout</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* removed duplicate inline preview overlay to avoid duplicates; global modal below is used */}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Global preview modal for Aadhaar/PAN and other files (shows when handlePreview is called) */}
+      <Modal visible={showPreviewModal} animationType="fade" transparent>
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 18,
+          }}
+        >
+          <View
+            style={{
+              width: '100%',
+              maxWidth: 820,
+              borderRadius: 10,
+              overflow: 'hidden',
+              position: 'relative',
+            }}
+          >
+            {/* top-right close */}
+            <TouchableOpacity
+              onPress={() => {
+                setShowPreviewModal(false);
+                setPreviewImageUrl(null);
+              }}
+              style={{ position: 'absolute', right: 8, top: 8, zIndex: 20, padding: 8 }}
+              accessibilityLabel="Close preview"
+            >
+              <Ionicons name="close" size={22} color="#fff" />
+            </TouchableOpacity>
+
+            {previewImageUrl ? (
+              <Image
+                source={{ uri: previewImageUrl }}
+                style={{
+                  width: '100%',
+                  height: 600,
+                  resizeMode: 'contain',
+                  backgroundColor: '#000',
+                }}
+              />
+            ) : (
+              <View style={{ backgroundColor: '#fff', padding: 18 }}>
+                <Text style={{ color: '#333' }}>No preview available</Text>
+              </View>
+            )}
+
+            {/* footer kept for accessibility on small screens */}
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', padding: 12 }}>
+              <TouchableOpacity
+                style={styles.smallBtn}
+                onPress={() => {
+                  setShowPreviewModal(false);
+                  setPreviewImageUrl(null);
+                }}
+              >
+                <Text style={{ color: '#fff' }}>Close</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1940,12 +2305,15 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               onChangeText={(t) => setOwnerComplaintForm((s) => ({ ...s, description: t }))}
               multiline
             />
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
               <TouchableOpacity
                 style={styles.smallBtn}
                 onPress={async () => {
                   try {
-                    const url = await pickAndUploadFile({ accept: 'image/*', fallbackApiPath: '/api/owner/upload' });
+                    const url = await pickAndUploadFile({
+                      accept: 'image/*',
+                      fallbackApiPath: '/api/owner/upload',
+                    });
                     if (url) setOwnerComplaintForm((s) => ({ ...s, image: url }));
                   } catch (e) {
                     console.warn('pick image failed', e);
@@ -2089,6 +2457,8 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
     </View>
   );
 }
+
+// (uploadPropertyDocAs is implemented inside the component so it can access state setters)
 
 // Small picker-like dropdown implemented using TouchableOpacity + modal for simplicity
 function PickerLike({ flats, value, onChange, disabled }: any) {
