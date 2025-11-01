@@ -15,8 +15,15 @@ function getBaseUrl() {
   // 2) Web (browser) -> prefer the developer machine LAN IP (so web builds show same host)
   // Note: explicit env/API_BASE_URL is handled above. For web we prefer DEFAULT_HOST so
   // logs and requests use the LAN IP instead of localhost when testing from other devices.
+  // However, when running in the browser (Expo web / responsive mode) prefer the page's
+  // hostname so requests target the same host the browser is served from (e.g. localhost).
   if (typeof window !== 'undefined' && (window as any)?.location) {
-    return `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
+    try {
+      const host = (window as any).location.hostname || DEFAULT_HOST;
+      return `http://${host}:${DEFAULT_PORT}`;
+    } catch (e) {
+      return `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
+    }
   }
 
   // 3) Native (Expo). If running on a physical device prefer the machine LAN IP so Expo Go can reach the backend

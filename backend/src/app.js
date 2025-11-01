@@ -16,6 +16,7 @@ if (
       api_secret: process.env.CLOUDINARY_API_SECRET,
       secure: true,
     });
+    console.log('[app] Cloudinary configured for', process.env.CLOUDINARY_CLOUD_NAME);
     // also set CLOUDINARY_URL for modules that check that
     if (!process.env.CLOUDINARY_URL) {
       process.env.CLOUDINARY_URL = `cloudinary://${process.env.CLOUDINARY_API_KEY}:${process.env.CLOUDINARY_API_SECRET}@${process.env.CLOUDINARY_CLOUD_NAME}`;
@@ -26,7 +27,10 @@ if (
 }
 const app = express();
 
-app.use(express.json());
+// Allow larger JSON bodies for base64 image uploads from mobile clients
+app.use(express.json({ limit: '10mb' }));
+// Also accept URL-encoded bodies with larger limits if clients send form data
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors());
 
 app.get('/', (req, res) => res.json({ ok: true, message: 'Society Karbhar API' }));

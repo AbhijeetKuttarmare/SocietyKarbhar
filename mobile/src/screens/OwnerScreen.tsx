@@ -22,7 +22,7 @@ import ProfileCard from '../components/ProfileCard';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import api, { setAuthHeader, attachErrorHandler } from '../services/api';
-import pickAndUploadProfile from '../services/uploadProfile';
+import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 
 type Props = {
   user: any;
@@ -63,7 +63,7 @@ const SAMPLE_TENANTS = [
   },
 ];
 
-const SAMPLE_MAINTENANCE = [
+const SAMPLE_BILLS = [
   {
     id: 'm1',
     title: 'Water pump repair',
@@ -84,13 +84,15 @@ const SAMPLE_MAINTENANCE = [
 
 export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHandled }: Props) {
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'tenants' | 'maintenance' | 'documents' | 'settings' | 'notices' | 'helplines'
-  >('overview');
+    'dashboard' | 'tenants' | 'bills' | 'documents' | 'settings' | 'notices' | 'helplines'
+  >('dashboard');
   // start with empty list; real data is fetched in useEffect via API
   const [tenants, setTenants] = useState<any[]>([]);
-  const [maintenance, setMaintenance] = useState<any[]>(SAMPLE_MAINTENANCE);
+  const [bills, setBills] = useState<any[]>(SAMPLE_BILLS);
+  const [myBills, setMyBills] = useState<any[]>([]); // bills assigned to this owner
+  const [tenantBills, setTenantBills] = useState<any[]>([]); // bills raised by this owner
   // track which bottom nav item is selected for correct highlighting
-  const [selectedBottom, setSelectedBottom] = useState<string>('overview');
+  const [selectedBottom, setSelectedBottom] = useState<string>('dashboard');
 
   // Tenant modal state
   const [showTenantModal, setShowTenantModal] = useState(false);
@@ -249,6 +251,20 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   const [noticesCount, setNoticesCount] = useState<number>(0);
   const [noticesList, setNoticesList] = useState<any[]>([]);
   const [showNoticesModal, setShowNoticesModal] = useState(false);
+  // Owner-level complaint & bills modals
+  const [showOwnerComplaintModal, setShowOwnerComplaintModal] = useState(false);
+  const [ownerComplaintForm, setOwnerComplaintForm] = useState({
+    title: '',
+    description: '',
+    image: '',
+  });
+  const [showOwnerBillsModal, setShowOwnerBillsModal] = useState(false);
+  const [ownerBillForm, setOwnerBillForm] = useState({
+    tenantId: '',
+    type: 'rent',
+    amount: '',
+    description: '',
+  });
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
     (user as any)?.avatar || (user as any)?.image
@@ -272,6 +288,19 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
     });
   }, [tenants, tenantFilter, tenantQ]);
 
+  // per-tenant outstanding amount map (sum of open/payment_pending bills assigned to tenant)
+  const tenantDueMap = useMemo(() => {
+    const m: Record<string, number> = {};
+    (bills || []).forEach((b: any) => {
+      const assigned = b && (b.assigned_to || b.assignedTo || b.tenantId || b.assignedToId);
+      if (!assigned) return;
+      const status = (b.status || '').toString().toLowerCase();
+      if (status === 'closed') return; // skip closed bills
+      m[assigned] = (m[assigned] || 0) + (Number(b.cost) || 0);
+    });
+    return m;
+  }, [bills]);
+
   // grouped tenant lists
   const activeTenants = useMemo(() => tenants.filter((t) => t.status === 'active'), [tenants]);
   const inactiveTenants = useMemo(() => tenants.filter((t) => t.status !== 'active'), [tenants]);
@@ -293,10 +322,13 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       totalTenants: tenants.length,
       active: tenants.filter((t) => t.status === 'active').length,
       previous: tenants.filter((t) => t.status !== 'active').length,
-      maintenanceCount: maintenance.length,
+      // show total outstanding amount (sum of open/payment_pending bills)
+      billsAmount: bills
+        .filter((b) => !b || !b.status || String(b.status).toLowerCase() !== 'closed')
+        .reduce((s: number, b: any) => s + (Number(b.cost) || 0), 0),
       documents: propertyDocs.length,
     }),
-    [tenants, maintenance, propertyDocs]
+    [tenants, bills, propertyDocs]
   );
 
   // Responsive breakpoints (reactive)
@@ -326,41 +358,47 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
   async function pickPropertyDoc() {
     try {
-      const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: false });
-      const doc: any = res as any;
-      if (doc.type !== 'success') return;
-      // read as base64 for preview/store
-      const base64 = await FileSystem.readAsStringAsync(doc.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      const url = await pickAndUploadFile({ accept: '*/*', fallbackApiPath: '/api/owner/upload' });
+      if (!url) return;
       const newDoc = {
         id: String(Date.now()),
-        name: doc.name || 'file',
-        uri: doc.uri,
-        dataUrl: `data:${doc.mimeType || 'application/octet-stream'};base64,${base64}`,
+        name: String(new Date().getTime()),
+        uri: url,
+        file_url: url,
         uploadedAt: new Date().toISOString(),
-      };
-      // upload to server (owner upload endpoint)
+      } as any;
       setPropertyDocs((s) => [newDoc, ...s]);
       try {
-        const up = await api.post('/api/owner/upload', {
-          dataUrl: newDoc.dataUrl,
-          filename: newDoc.name,
+        // create document record
+        await api.post('/api/owner/documents', {
+          title: newDoc.name,
+          file_url: url,
+          file_type: 'application/octet-stream',
         });
-        const url = up.data && up.data.url;
-        if (url) {
-          // create document record
-          await api.post('/api/owner/documents', {
-            title: newDoc.name,
-            file_url: url,
-            file_type: doc.mimeType || 'application/octet-stream',
-          });
-        }
       } catch (e: any) {
-        console.warn('upload failed', e && ((e as any).response?.data || (e as any).message));
+        console.warn(
+          'create document record failed',
+          e && ((e as any).response?.data || e.message)
+        );
       }
     } catch (e: any) {
-      console.warn('pick property doc failed', e);
+      console.warn('pick property doc failed', e && ((e as any).response?.data || e.message));
+    }
+  }
+
+  // upload a picked image/file and return the uploaded URL (used by owner complaint/bill attachments)
+  async function uploadFileAndGetUrl(uri: string, filename?: string) {
+    try {
+      // read file as base64
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const dataUrl = `data:application/octet-stream;base64,${base64}`;
+      const up = await api.post('/api/owner/upload', { dataUrl, filename: filename || 'file' });
+      return up.data && (up.data.url || up.data.file_url);
+    } catch (e) {
+      console.warn('uploadFileAndGetUrl failed', e);
+      return uri; // fallback to local uri
     }
   }
 
@@ -513,16 +551,13 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
     }
   }
 
-  async function createMaintenance(m: any) {
+  async function createBill(m: any) {
     try {
-      const r = await api.post('/api/owner/maintenance', m);
-      const created = r.data && r.data.maintenance;
-      if (created) setMaintenance((s) => [created, ...s]);
+      const r = await api.post('/api/owner/bills', m);
+      const created = r.data && r.data.bill;
+      if (created) setBills((s) => [created, ...s]);
     } catch (e: any) {
-      console.warn(
-        'create maintenance failed',
-        e && ((e as any).response?.data || (e as any).message)
-      );
+      console.warn('create bill failed', e && ((e as any).response?.data || (e as any).message));
     }
   }
 
@@ -535,14 +570,16 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
     let mounted = true;
     async function load() {
       try {
-        const [t, m, d] = await Promise.all([
+        const [t, m, assigned, d] = await Promise.all([
           api.get('/api/owner/tenants'),
-          api.get('/api/owner/maintenance'),
+          api.get('/api/owner/bills'), // bills raised by this owner
+          api.get('/api/owner/bills/assigned'), // bills assigned to this owner (my bills)
           api.get('/api/owner/documents'),
         ]);
         if (!mounted) return;
         if (t.data && t.data.users) setTenants(t.data.users.map((u: any) => clientShapeFromApi(u)));
-        if (m.data && m.data.maintenance) setMaintenance(m.data.maintenance);
+        if (m.data && m.data.bills) setTenantBills(m.data.bills);
+        if (assigned.data && assigned.data.bills) setMyBills(assigned.data.bills);
         if (d.data && d.data.documents)
           setPropertyDocs(
             d.data.documents.map((x: any) => ({
@@ -587,6 +624,20 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
     };
   }, []);
 
+  // refresh bills only
+  async function refreshBills() {
+    try {
+      const [raisedRes, assignedRes] = await Promise.all([
+        api.get('/api/owner/bills'),
+        api.get('/api/owner/bills/assigned'),
+      ]);
+      if (raisedRes.data && raisedRes.data.bills) setTenantBills(raisedRes.data.bills);
+      if (assignedRes.data && assignedRes.data.bills) setMyBills(assignedRes.data.bills);
+    } catch (e) {
+      console.warn('refresh bills failed', e);
+    }
+  }
+
   async function fetchNotices() {
     try {
       const r = await api.get('/api/notices');
@@ -625,8 +676,9 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   // Owner bottom tab: Home → Support → My Tenants → Profile
   // Use keys that match `activeTab` so highlighting/selection works correctly.
   const bottomItems = [
-    { key: 'overview', label: 'Home', icon: 'home' },
+    { key: 'dashboard', label: 'Home', icon: 'home' },
     { key: 'helplines', label: 'Helplines', icon: 'call' },
+    { key: 'bills', label: 'Bills', icon: 'cash' },
     { key: 'tenants', label: 'My Tenants', icon: 'people' },
     { key: 'profile', label: 'Profile', icon: 'person' },
   ];
@@ -650,8 +702,8 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
           </View>
           <View style={styles.menu}>
             <TouchableOpacity
-              style={[styles.menuItem, activeTab === 'overview' && styles.menuActive]}
-              onPress={() => setActiveTab('overview')}
+              style={[styles.menuItem, activeTab === 'dashboard' && styles.menuActive]}
+              onPress={() => setActiveTab('dashboard')}
             >
               <Ionicons name="home" size={18} color="#fff" />
               <Text style={styles.menuText}>Home</Text>
@@ -742,14 +794,34 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
         {/* Tenants header banner removed per request */}
 
         <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
-          {activeTab === 'overview' && (
+          {activeTab === 'dashboard' && (
             <View>
-              <View style={styles.statsRow}>
+              {/* Stats arranged as requested: first row -> Total Tenants & Active; second row -> Previous & Maintenance
+                  Docs kept below and a Raise Complaint button added. */}
+              <View style={styles.statsRowRow}>
                 <StatCard title="Total Tenants" value={stats.totalTenants} />
                 <StatCard title="Active" value={stats.active} />
+              </View>
+              <View style={styles.statsRowRow}>
                 <StatCard title="Previous" value={stats.previous} />
-                <StatCard title="Maintenance" value={stats.maintenanceCount} />
+                <StatCard title="Bills" value={stats.billsAmount ? `₹${stats.billsAmount}` : 0} />
+              </View>
+              <View style={{ flexDirection: 'row', marginTop: 6 }}>
                 <StatCard title="Docs" value={stats.documents} />
+              </View>
+              <View style={{ marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TouchableOpacity
+                  style={[styles.smallBtn, { alignSelf: 'flex-start', marginRight: 8 }]}
+                  onPress={() => setShowOwnerComplaintModal(true)}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '700' }}>Raise Complaint</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.smallBtn, { alignSelf: 'flex-start', backgroundColor: '#1abc9c' }]}
+                  onPress={() => setShowOwnerBillsModal(true)}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '700' }}>Bills</Text>
+                </TouchableOpacity>
               </View>
               {/* Tenant financial summary: rent and documents (best-effort - payments/bills may not be tracked) */}
               <View style={{ marginTop: 12 }}>
@@ -782,11 +854,16 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                         </View>
                         <View style={{ alignItems: 'flex-end' }}>
                           <Text>Rent: ₹{t.rent || '—'}</Text>
-                          {/* We don't have a payments model, so show Due if no payment tracking exists */}
-                          <View
-                            style={[styles.badge, { marginTop: 6, backgroundColor: '#e67e22' }]}
-                          >
-                            <Text style={{ color: '#fff' }}>Due</Text>
+                          <View style={{ marginTop: 6, alignItems: 'flex-end' }}>
+                            {tenantDueMap[t.id] && tenantDueMap[t.id] > 0 ? (
+                              <View style={[styles.badge, { backgroundColor: '#e67e22' }]}>
+                                <Text style={{ color: '#fff' }}>Due: ₹{tenantDueMap[t.id]}</Text>
+                              </View>
+                            ) : (
+                              <View style={[styles.badge, { backgroundColor: '#2ecc71' }]}>
+                                <Text style={{ color: '#fff' }}>No due</Text>
+                              </View>
+                            )}
                           </View>
                         </View>
                       </View>
@@ -794,7 +871,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   ))
                 )}
               </View>
-              {/* Quick Actions moved to My Tenants - hidden on Overview per request */}
+              {/* Quick Actions moved to My Tenants - hidden on Dashboard per request */}
             </View>
           )}
 
@@ -1152,21 +1229,85 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
             </View>
           )}
 
-          {activeTab === 'maintenance' && (
+          {activeTab === 'bills' && (
             <View>
+              <Text style={styles.sectionTitle}>My Bills</Text>
+              {myBills.length === 0 ? (
+                <View style={{ padding: 12 }}>
+                  <Text style={{ color: '#666' }}>No bills assigned to you.</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={myBills}
+                  keyExtractor={(m: any) => m.id}
+                  renderItem={({ item }) => (
+                    <View style={styles.maintCard}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontWeight: '700' }}>{item.title}</Text>
+                        <Text style={{ color: '#666' }}>{item.description}</Text>
+                        {item.payment_proof_url ? (
+                          <Text style={{ color: '#666', marginTop: 6 }}>Proof attached</Text>
+                        ) : null}
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text>₹{item.cost}</Text>
+                        <Text
+                          style={{
+                            color:
+                              item.status === 'payment_pending'
+                                ? '#e67e22'
+                                : item.status === 'closed'
+                                ? '#2ecc71'
+                                : '#6b7280',
+                          }}
+                        >
+                          {item.status}
+                        </Text>
+                        <View style={{ height: 8 }} />
+                        <TouchableOpacity
+                          style={styles.smallBtn}
+                          onPress={async () => {
+                            try {
+                              // Use centralized picker+uploader which works on web (file input) and native
+                              const url = await pickAndUploadFile({ accept: '*/*', fallbackApiPath: '/api/owner/upload' });
+                              if (!url) return alert('Upload failed');
+                              // call mark-paid endpoint (same as tenant flow) to set payment_proof_url
+                              const r = await api.post(`/api/bills/${item.id}/mark-paid`, {
+                                payment_proof_url: url,
+                              });
+                              const updated = r.data && r.data.bill;
+                              if (updated) {
+                                // update local list
+                                setMyBills((s) => s.map((it) => (it.id === updated.id ? updated : it)));
+                                alert('Payment proof submitted. Verification pending.');
+                              } else alert('Submitted');
+                            } catch (e) {
+                              console.warn('upload proof failed', e);
+                              alert('Failed to upload proof');
+                            }
+                          }}
+                        >
+                          <Text style={{ color: '#fff' }}>Upload Proof</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                />
+              )}
+
+              <View style={{ height: 12 }} />
               <View
-                style={{
-                  flexDirection: 'row',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
+                style={[
+                  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+                ]}
               >
-                <Text style={styles.sectionTitle}>Maintenance</Text>
+                <Text style={styles.sectionTitle}>Tenant Bills (raised by you)</Text>
                 <TouchableOpacity
                   style={styles.smallBtn}
                   onPress={() =>
-                    createMaintenance({
-                      title: 'New Request',
+                    createBill({
+                      title: 'New Bill',
+                      type: 'other',
                       description: '',
                       cost: 0,
                       date: new Date().toISOString().slice(0, 10),
@@ -1174,27 +1315,33 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                     })
                   }
                 >
-                  <Text style={{ color: '#fff' }}>New</Text>
+                  <Text style={{ color: '#fff' }}>New Bill</Text>
                 </TouchableOpacity>
               </View>
-              <FlatList
-                data={maintenance}
-                keyExtractor={(m: any) => m.id}
-                renderItem={({ item }) => (
-                  <View style={styles.maintCard}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontWeight: '700' }}>{item.title}</Text>
-                      <Text style={{ color: '#666' }}>{item.description}</Text>
+              {tenantBills.length === 0 ? (
+                <View style={{ padding: 12 }}>
+                  <Text style={{ color: '#666' }}>No bills raised by you.</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={tenantBills}
+                  keyExtractor={(m: any) => m.id}
+                  renderItem={({ item }) => (
+                    <View style={styles.maintCard}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontWeight: '700' }}>{item.title}</Text>
+                        <Text style={{ color: '#666' }}>{item.description}</Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text>₹{item.cost}</Text>
+                        <Text style={{ color: item.status === 'pending' ? '#e67e22' : '#2ecc71' }}>
+                          {item.status}
+                        </Text>
+                      </View>
                     </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text>₹{item.cost}</Text>
-                      <Text style={{ color: item.status === 'pending' ? '#e67e22' : '#2ecc71' }}>
-                        {item.status}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-              />
+                  )}
+                />
+              )}
             </View>
           )}
 
@@ -1632,13 +1779,23 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               imageUri={userAvatar || user?.avatar || user?.image}
               onEdit={async () => {
                 try {
+                  console.debug('[OwnerScreen] starting profile pickAndUploadProfile');
                   const url = await pickAndUploadProfile();
-                  await api.put('/api/user', { avatar: url });
+                  console.debug('[OwnerScreen] pickAndUploadProfile returned', url);
+                  if (!url) return; // cancelled
+                  const r = await api.put('/api/user', { avatar: url });
+                  console.debug('[OwnerScreen] PUT /api/user response', r && r.data);
                   setUserAvatar(url);
                   alert('Profile photo updated');
-                } catch (e) {
-                  console.warn('owner profile upload failed', e);
-                  alert('Upload failed');
+                } catch (err: any) {
+                  // show detailed error for debugging in dev
+                  const msg =
+                    (err && (err.response?.data || err.message)) || String(err) || 'unknown error';
+                  console.error('[OwnerScreen] owner profile upload failed', err);
+                  try {
+                    // show a helpful alert in the browser when testing
+                    alert('Upload failed: ' + (msg && JSON.stringify(msg)));
+                  } catch (e) {}
                 }
               }}
               onCall={(p) => {
@@ -1676,6 +1833,21 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               )}
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+              {/* Dev helper: test backend connectivity from the client (visible in dev builds) */}
+              <TouchableOpacity
+                style={[styles.smallBtnClose, { marginRight: 8 }]}
+                onPress={async () => {
+                  try {
+                    const res = await (await import('../services/api')).testConnectivity();
+                    alert('Connectivity: ' + JSON.stringify(res));
+                  } catch (e: any) {
+                    alert('Connectivity test failed: ' + (e && (e.message || e)));
+                  }
+                }}
+              >
+                <Text style={styles.closeText}>Test backend</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity
                 style={[styles.smallBtnClose, { marginRight: 8 }]}
                 onPress={() => setShowProfileModal(false)}
@@ -1744,6 +1916,171 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 }}
               >
                 <Text style={{ color: '#fff' }}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Owner: Raise Complaint modal */}
+      <Modal visible={showOwnerComplaintModal} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Raise Complaint</Text>
+            <TextInput
+              placeholder="Title"
+              style={styles.input}
+              value={ownerComplaintForm.title}
+              onChangeText={(t) => setOwnerComplaintForm((s) => ({ ...s, title: t }))}
+            />
+            <TextInput
+              placeholder="Description"
+              style={[styles.input, { height: 120 }]}
+              value={ownerComplaintForm.description}
+              onChangeText={(t) => setOwnerComplaintForm((s) => ({ ...s, description: t }))}
+              multiline
+            />
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
+              <TouchableOpacity
+                style={styles.smallBtn}
+                onPress={async () => {
+                  try {
+                    const url = await pickAndUploadFile({ accept: 'image/*', fallbackApiPath: '/api/owner/upload' });
+                    if (url) setOwnerComplaintForm((s) => ({ ...s, image: url }));
+                  } catch (e) {
+                    console.warn('pick image failed', e);
+                  }
+                }}
+              >
+                <Text style={{ color: '#fff' }}>Attach Image</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.smallBtn}
+                onPress={async () => {
+                  try {
+                    const payload: any = {
+                      title: ownerComplaintForm.title,
+                      description: ownerComplaintForm.description,
+                    };
+                    if (ownerComplaintForm.image) payload.file_url = ownerComplaintForm.image;
+                    await api.post('/api/complaints', payload);
+                    alert('Complaint raised');
+                    setShowOwnerComplaintModal(false);
+                    setOwnerComplaintForm({ title: '', description: '', image: '' });
+                  } catch (e) {
+                    console.warn('raise complaint failed', e);
+                    alert('Failed to raise complaint');
+                  }
+                }}
+              >
+                <Text style={{ color: '#fff' }}>Raise</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ marginTop: 8 }}>
+              <TouchableOpacity
+                style={styles.smallBtnClose}
+                onPress={() => setShowOwnerComplaintModal(false)}
+              >
+                <Text style={styles.closeText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Owner: Bills creation modal */}
+      <Modal visible={showOwnerBillsModal} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Create Bill</Text>
+            <Text style={styles.label}>Select Tenant</Text>
+            <View style={{ marginBottom: 8 }}>
+              <View
+                style={{
+                  borderWidth: 1,
+                  borderColor: '#e6e6e6',
+                  borderRadius: 8,
+                  overflow: 'hidden',
+                }}
+              >
+                <PickerLike
+                  flats={tenants.map((t) => ({ id: t.id, flat_no: t.name }))}
+                  value={ownerBillForm.tenantId}
+                  onChange={(id: any) => setOwnerBillForm((s) => ({ ...s, tenantId: id }))}
+                />
+              </View>
+            </View>
+            <Text style={styles.label}>Type</Text>
+            <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+              {['rent', 'electricity', 'other'].map((tp) => (
+                <TouchableOpacity
+                  key={tp}
+                  onPress={() => setOwnerBillForm((s) => ({ ...s, type: tp }))}
+                  style={[styles.segment, ownerBillForm.type === tp ? styles.segmentActive : {}]}
+                >
+                  <Text style={ownerBillForm.type === tp ? { color: '#fff' } : {}}>
+                    {tp === 'rent' ? 'Rent' : tp === 'electricity' ? 'Electricity' : 'Other'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={styles.label}>Amount</Text>
+            <TextInput
+              style={styles.input}
+              value={ownerBillForm.amount}
+              onChangeText={(t) => setOwnerBillForm((s) => ({ ...s, amount: t }))}
+              keyboardType="numeric"
+            />
+            <Text style={styles.label}>Note (optional)</Text>
+            <TextInput
+              style={[styles.input, { height: 80 }]}
+              value={ownerBillForm.description}
+              onChangeText={(t) => setOwnerBillForm((s) => ({ ...s, description: t }))}
+              multiline
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+              <TouchableOpacity
+                style={[styles.smallBtn, { marginRight: 8 }]}
+                onPress={async () => {
+                  try {
+                    const payload: any = {
+                      title:
+                        ownerBillForm.type === 'rent'
+                          ? 'Monthly Rent'
+                          : ownerBillForm.type === 'electricity'
+                          ? 'Electricity Bill'
+                          : 'Other Bill',
+                      type: ownerBillForm.type || 'other',
+                      description: ownerBillForm.description,
+                      cost: Number(ownerBillForm.amount) || 0,
+                      tenantId: ownerBillForm.tenantId || undefined,
+                      date: new Date().toISOString().slice(0, 10),
+                      status: 'pending',
+                    };
+                    const r = await api.post('/api/owner/bills', payload);
+                    const created = r.data && (r.data.bill || r.data);
+                    if (created) setBills((s) => [created, ...s]);
+                    alert('Bill created');
+                    setShowOwnerBillsModal(false);
+                    setOwnerBillForm({
+                      tenantId: '',
+                      type: 'rent',
+                      amount: '',
+                      description: '',
+                    });
+                  } catch (e) {
+                    console.warn('create bill failed', e);
+                    alert('Failed to create bill');
+                  }
+                }}
+              >
+                <Text style={{ color: '#fff' }}>Create</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.smallBtnClose}
+                onPress={() => setShowOwnerBillsModal(false)}
+              >
+                <Text style={styles.closeText}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1837,6 +2174,7 @@ const styles = StyleSheet.create({
   profilePic: { width: 36, height: 36, borderRadius: 18, marginLeft: 12 },
   iconBtn: { padding: 6, marginRight: 8, backgroundColor: '#fff', borderRadius: 8 },
   statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  statsRowRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   statCard: {
     width: 150,
     padding: 12,
@@ -1965,6 +2303,7 @@ const styles = StyleSheet.create({
     padding: 18,
   },
   modalContent: { backgroundColor: '#fff', borderRadius: 10, padding: 12, maxHeight: '85%' },
+  modalTitle: { fontSize: 18, fontWeight: '800', marginBottom: 8 },
   label: { color: '#333', marginTop: 8, marginBottom: 4 },
   input: {
     borderWidth: 1,

@@ -30,11 +30,11 @@ async function run(){
     res = await request(app).post('/api/owner/tenants').set('Authorization', `Bearer ${token}`).send({ name: 'New Tenant', phone: '9666666666' });
     console.log('/owner/tenants POST', res.status, res.body);
 
-    res = await request(app).post('/api/owner/maintenance').set('Authorization', `Bearer ${token}`).send({ title: 'Leaky pipe', description: 'Pipe in kitchen', cost: 500 });
-    console.log('/owner/maintenance POST', res.status, res.body);
+  res = await request(app).post('/api/owner/bills').set('Authorization', `Bearer ${token}`).send({ title: 'Leaky pipe', description: 'Pipe in kitchen', cost: 500 });
+  console.log('/owner/bills POST', res.status, res.body);
 
-    res = await request(app).get('/api/owner/maintenance').set('Authorization', `Bearer ${token}`);
-    console.log('/owner/maintenance GET', res.status, res.body);
+  res = await request(app).get('/api/owner/bills').set('Authorization', `Bearer ${token}`);
+  console.log('/owner/bills GET', res.status, res.body);
 
     // upload flow: send dataUrl minimal
     res = await request(app).post('/api/owner/upload').set('Authorization', `Bearer ${token}`).send({ dataUrl: 'data:text/plain;base64,SGVsbG8=' });

@@ -1,9 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { Complaint } = require('../models');
+const { Complaint, Bill } = require('../models');
 const { Op } = require('sequelize');
 const { authenticate } = require('../middlewares/auth');
 const cloudinary = require('cloudinary').v2;
+// multer for multipart/form-data uploads (memory storage)
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 
 // cloudinary is configured centrally in app.js if env vars present
 try {
@@ -18,11 +21,27 @@ router.use(authenticate);
 // List maintenance requests raised by current user
 router.get('/maintenance', async (req, res) => {
   try {
-    const items = await Complaint.findAll({
+    // Fetch tenant-raised complaints
+    const complaints = await Complaint.findAll({
       where: { societyId: req.user.societyId, raised_by: req.user.id },
       order: [['createdAt', 'DESC']],
     });
-    res.json({ maintenance: items });
+    // Fetch bills assigned to this tenant
+    const bills = await Bill.findAll({
+      where: { societyId: req.user.societyId, assigned_to: req.user.id },
+      order: [['createdAt', 'DESC']],
+    });
+
+    // Combine complaints and bills so tenant sees both under the maintenance view
+    const combined = [
+      ...bills.map((b) => ({ ...(b.get ? b.get({ plain: true }) : b), _type: 'bill' })),
+      ...complaints.map((c) => ({ ...(c.get ? c.get({ plain: true }) : c), _type: 'complaint' })),
+    ];
+
+    // sort combined by createdAt descending
+    combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    res.json({ maintenance: combined });
   } catch (e) {
     console.error('tenant maintenance list failed', e);
     res.status(500).json({ error: 'failed', detail: e && e.message });
@@ -108,6 +127,11 @@ router.post('/upload', async (req, res) => {
   const { dataUrl, filename } = req.body;
   if (!dataUrl) return res.status(400).json({ error: 'dataUrl required' });
   try {
+    // debug: log incoming upload size and filename to assist troubleshooting
+    try {
+      const len = typeof dataUrl === 'string' ? dataUrl.length : 0;
+      console.log(`[tenant/upload] incoming upload: filename=${filename || 'unknown'} size=${len}`);
+    } catch (e) {}
     if (
       process.env.CLOUDINARY_CLOUD_NAME &&
       process.env.CLOUDINARY_API_KEY &&
@@ -124,6 +148,111 @@ router.post('/upload', async (req, res) => {
   } catch (e) {
     console.error('tenant upload failed', e && e.message);
     return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+  }
+});
+
+// Upload endpoint that accepts multipart/form-data (file field `file`) -> { url }
+router.post('/upload_form', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'file required' });
+
+    // If Cloudinary configured, upload the binary
+    if (
+      process.env.CLOUDINARY_CLOUD_NAME &&
+      process.env.CLOUDINARY_API_KEY &&
+      process.env.CLOUDINARY_API_SECRET
+    ) {
+      const opts = { folder: 'society_karbhar' };
+      if (process.env.CLOUDINARY_UPLOAD_PRESET)
+        opts.upload_preset = process.env.CLOUDINARY_UPLOAD_PRESET;
+      // convert buffer to dataUrl and upload via cloudinary.uploader.upload
+      const dataUrl = `data:${
+        file.mimetype || 'application/octet-stream'
+      };base64,${file.buffer.toString('base64')}`;
+      const result = await cloudinary.uploader.upload(dataUrl, opts);
+      console.log('[tenant/upload_form] uploaded to cloudinary', result && result.secure_url);
+      return res.json({ url: result.secure_url });
+    }
+
+    // fallback: return a data URL so client can still use the file
+    const base64 = file.buffer.toString('base64');
+    const mime = file.mimetype || 'application/octet-stream';
+    return res.json({ url: `data:${mime};base64,${base64}` });
+  } catch (e) {
+    console.error('tenant upload_form failed', e && e.message);
+    return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+  }
+});
+
+// Upload and save avatar for current authenticated user (multipart/form-data -> file)
+// Returns updated user record: { user }
+router.post('/user/avatar', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'file required' });
+
+    let url = null;
+    if (
+      process.env.CLOUDINARY_CLOUD_NAME &&
+      process.env.CLOUDINARY_API_KEY &&
+      process.env.CLOUDINARY_API_SECRET
+    ) {
+      const opts = { folder: 'society_karbhar/avatars' };
+      if (process.env.CLOUDINARY_UPLOAD_PRESET)
+        opts.upload_preset = process.env.CLOUDINARY_UPLOAD_PRESET;
+      const dataUrl = `data:${
+        file.mimetype || 'application/octet-stream'
+      };base64,${file.buffer.toString('base64')}`;
+      const result = await cloudinary.uploader.upload(dataUrl, opts);
+      console.log('[user/avatar] cloudinary result', result && result.secure_url);
+      url = result.secure_url;
+    } else {
+      // fallback to returning data URL
+      url = `data:${file.mimetype || 'application/octet-stream'};base64,${file.buffer.toString(
+        'base64'
+      )}`;
+    }
+
+    // update user record
+    const models = require('../models');
+    const { User } = models;
+    const u = await User.findByPk(req.user.id);
+    if (!u) return res.status(404).json({ error: 'user not found' });
+    await u.update({ avatar: url });
+    const out = u.get ? u.get({ plain: true }) : u;
+    return res.json({ user: out });
+  } catch (e) {
+    console.error('user avatar upload failed', e && e.message);
+    return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+  }
+});
+
+// Tenant: mark a bill (assigned to this tenant) as paid by uploading payment proof
+// Endpoint renamed to /api/bills/:id/mark-paid
+router.post('/bills/:id/mark-paid', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { payment_proof_url } = req.body;
+    if (!payment_proof_url) return res.status(400).json({ error: 'payment_proof_url required' });
+
+    // Try to find a Bill first
+    const models = require('../models');
+    const { Bill } = models;
+    if (!Bill) return res.status(404).json({ error: 'bills not available' });
+
+    const bill = await Bill.findByPk(id);
+    if (!bill) return res.status(404).json({ error: 'not found' });
+    if (bill.societyId !== req.user.societyId) return res.status(404).json({ error: 'not found' });
+    // Only assigned tenant may mark as paid
+    if (!bill.assigned_to || String(bill.assigned_to) !== String(req.user.id))
+      return res.status(403).json({ error: 'forbidden' });
+
+    await bill.update({ payment_proof_url, payment_by: req.user.id, status: 'payment_pending' });
+    return res.json({ bill });
+  } catch (e) {
+    console.error('tenant mark-paid failed', e && e.message);
+    return res.status(500).json({ error: 'failed', detail: e && e.message });
   }
 });
 

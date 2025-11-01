@@ -20,8 +20,9 @@ import { Ionicons } from '@expo/vector-icons';
 import BottomTab from '../components/BottomTab';
 import OwnerScreen from './OwnerScreen';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import ProfileCard from '../components/ProfileCard';
-import pickAndUploadProfile from '../services/uploadProfile';
+import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 
 type Props = { user: any; onLogout: () => void };
 
@@ -68,6 +69,9 @@ export default function TenantScreen({ user, onLogout }: Props) {
   const [rentHistory, setRentHistory] = useState<any[]>([]);
   const [maintenance, setMaintenance] = useState<any[]>([]);
   const [complaints, setComplaints] = useState<any[]>([]);
+  const [showMarkPaidModal, setShowMarkPaidModal] = useState(false);
+  const [selectedBill, setSelectedBill] = useState<any | null>(null);
+  const [proofUri, setProofUri] = useState<string | null>(null);
 
   // Modals for forms
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
@@ -103,8 +107,18 @@ export default function TenantScreen({ user, onLogout }: Props) {
     if (user && user.role === 'tenant') {
       fetchOwner();
       fetchHelplines();
+      fetchMaintenance();
     }
   }, []);
+
+  async function fetchMaintenance() {
+    try {
+      const r = await api.get('/api/maintenance');
+      if (r.data && r.data.maintenance) setMaintenance(r.data.maintenance);
+    } catch (e) {
+      console.warn('fetch maintenance failed', e);
+    }
+  }
 
   async function fetchHelplines() {
     try {
@@ -161,11 +175,15 @@ export default function TenantScreen({ user, onLogout }: Props) {
     }
   }
 
-  // Document picker for support/maintenance images
-  async function pickFile(setter: (uri: string) => void) {
+  // Document picker for support/maintenance images — uses centralized helper which
+  // provides a reliable web fallback and server multipart + base64 fallback.
+  async function pickFile(setter: (uriOrUrl: string) => void) {
     try {
-      const res: any = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: false });
-      if (res.type === 'success') setter(res.uri);
+      const url = await pickAndUploadFile({
+        accept: 'image/*',
+        fallbackApiPath: '/api/tenant/upload',
+      });
+      if (url) setter(url);
     } catch (e) {
       console.warn('pick failed', e);
     }
@@ -452,13 +470,6 @@ export default function TenantScreen({ user, onLogout }: Props) {
                       <View style={styles.actionRow}>
                         <TouchableOpacity
                           style={styles.actionBtn}
-                          onPress={() => setShowMaintenanceModal(true)}
-                        >
-                          <Ionicons name="construct" size={18} />
-                          <Text style={styles.actionText}>Request Maintenance</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.actionBtn}
                           onPress={() => setShowComplaintModal(true)}
                         >
                           <Ionicons name="alert-circle" size={18} />
@@ -488,6 +499,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
                       onEdit={async () => {
                         try {
                           const url = await pickAndUploadProfile();
+                          if (!url) return; // user cancelled
                           await api.put('/api/user', { avatar: url });
                           setProfile((p: any) => ({ ...(p || {}), avatar: url }));
                           alert('Profile photo updated');
@@ -621,10 +633,35 @@ export default function TenantScreen({ user, onLogout }: Props) {
                           <View style={{ flex: 1 }}>
                             <Text style={styles.listTitle}>{m.title}</Text>
                             <Text style={styles.listSub}>{m.description}</Text>
+                            {m._type === 'bill' ? (
+                              <View style={{ marginTop: 6 }}>
+                                <Text style={{ fontWeight: '700' }}>Amount: ₹{m.cost}</Text>
+                                <Text style={{ color: '#666', marginTop: 4 }}>
+                                  Type:{' '}
+                                  {m.type
+                                    ? String(m.type).charAt(0).toUpperCase() +
+                                      String(m.type).slice(1)
+                                    : 'Other'}
+                                </Text>
+                              </View>
+                            ) : null}
                           </View>
-                          <Text style={{ color: m.status === 'open' ? '#ff6b6b' : '#10b981' }}>
-                            {m.status}
-                          </Text>
+                          <View style={{ alignItems: 'flex-end' }}>
+                            <Text style={{ color: m.status === 'open' ? '#ff6b6b' : '#10b981' }}>
+                              {m.status}
+                            </Text>
+                            {m._type === 'bill' && m.status !== 'closed' ? (
+                              <TouchableOpacity
+                                style={[styles.smallBtn, { marginTop: 8 }]}
+                                onPress={() => {
+                                  setSelectedBill(m);
+                                  setShowMarkPaidModal(true);
+                                }}
+                              >
+                                <Text style={{ color: '#fff' }}>Mark Paid</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
                         </View>
                       ))
                     )}
@@ -968,6 +1005,75 @@ export default function TenantScreen({ user, onLogout }: Props) {
                   </View>
                   <View style={{ marginTop: 8 }}>
                     <Button title="Cancel" onPress={() => setShowMaintenanceModal(false)} />
+                  </View>
+                </View>
+              </View>
+            </Modal>
+
+            {/* Mark Paid modal (tenant uploads proof) */}
+            <Modal visible={showMarkPaidModal} animationType="slide" transparent>
+              <View style={styles.modalBackdrop}>
+                <View style={styles.modalContent}>
+                  <Text style={styles.modalTitle}>Mark Bill as Paid</Text>
+                  <Text style={{ marginBottom: 8 }}>
+                    {selectedBill ? `${selectedBill.title} • ₹${selectedBill.cost}` : ''}
+                  </Text>
+                  <View style={{ marginBottom: 8 }}>
+                    <Button
+                      title={proofUri ? 'Change Proof' : 'Attach Payment Proof'}
+                      onPress={async () => {
+                        try {
+                          // pick and upload immediately; store resulting URL
+                          const url = await pickAndUploadFile({
+                            accept: 'image/*',
+                            fallbackApiPath: '/api/tenant/upload',
+                          });
+                          if (url) setProofUri(url);
+                        } catch (e) {
+                          console.warn('pick proof failed', e);
+                        }
+                      }}
+                    />
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                    <Button
+                      title="Submit"
+                      onPress={async () => {
+                        try {
+                          if (!selectedBill) return;
+                          if (!proofUri) {
+                            alert('Please attach a proof image');
+                            return;
+                          }
+                          // if proofUri is a data: URL (unexpected), upload it first
+                          let finalUrl = proofUri;
+                          if (String(proofUri).startsWith('data:')) {
+                            const up = await api.post('/api/tenant/upload', {
+                              dataUrl: proofUri,
+                              filename: `proof-${Date.now()}.jpg`,
+                            });
+                            finalUrl = up.data && up.data.url;
+                            if (!finalUrl) throw new Error('upload failed');
+                          }
+                          // mark paid
+                          const r = await api.post(`/api/bills/${selectedBill.id}/mark-paid`, {
+                            payment_proof_url: finalUrl,
+                          });
+                          const updated = r.data && r.data.bill;
+                          // refresh local list
+                          fetchMaintenance();
+                          setShowMarkPaidModal(false);
+                          setSelectedBill(null);
+                          setProofUri(null);
+                          alert('Marked as paid — owner will verify.');
+                        } catch (e) {
+                          console.warn('mark paid failed', e);
+                          alert('Failed to submit proof');
+                        }
+                      }}
+                    />
+                    <View style={{ width: 8 }} />
+                    <Button title="Cancel" onPress={() => setShowMarkPaidModal(false)} />
                   </View>
                 </View>
               </View>

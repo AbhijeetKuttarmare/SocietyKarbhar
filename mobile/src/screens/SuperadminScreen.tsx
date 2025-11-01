@@ -430,35 +430,117 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                           ss.mobile_number
                         );
 
+                        const initials = s.name
+                          ? s.name
+                              .split(' ')
+                              .map((p: string) => p[0])
+                              .slice(0, 2)
+                              .join('')
+                              .toUpperCase()
+                          : (s.id || '').slice(0, 2).toUpperCase();
+
                         return (
-                          <View key={s.id} style={styles.socCard}>
-                            <Text style={styles.socCardTitle}>{s.name}</Text>
-                            <Text style={styles.socCardSub}>
-                              {ss.address || `${s.area || ''} ${s.city || ''}`}
-                            </Text>
-                            <Text style={styles.socCardMeta}>Admin: {adminName}</Text>
+                          <View
+                            key={s.id}
+                            style={[
+                              styles.card,
+                              {
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                padding: 12,
+                                marginVertical: 6,
+                              },
+                            ]}
+                          >
                             <View
                               style={{
-                                marginTop: 10,
-                                flexDirection: 'row',
-                                justifyContent: 'space-between',
+                                width: 56,
+                                height: 56,
+                                borderRadius: 28,
+                                backgroundColor: '#eef2ff',
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                marginRight: 12,
                               }}
                             >
+                              <Text style={{ fontWeight: '800', color: '#4f46e5', fontSize: 16 }}>
+                                {initials}
+                              </Text>
+                            </View>
+
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ fontSize: 16, fontWeight: '700' }}>{s.name}</Text>
+                              <Text style={{ color: '#6b7280', marginTop: 4 }}>
+                                {ss.address || `${s.area || ''} ${s.city || ''}`}
+                              </Text>
+
+                              <View
+                                style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 }}
+                              >
+                                {s.area || s.city || s.country ? (
+                                  [s.area, s.city, s.country]
+                                    .filter(Boolean)
+                                    .slice(0, 3)
+                                    .map((label: any, idx: number) => (
+                                      <View
+                                        key={idx}
+                                        style={{
+                                          backgroundColor: '#f3f4ff',
+                                          paddingHorizontal: 8,
+                                          paddingVertical: 4,
+                                          borderRadius: 12,
+                                          marginRight: 6,
+                                          marginBottom: 6,
+                                        }}
+                                      >
+                                        <Text style={{ fontSize: 12, color: '#4f46e5' }}>
+                                          {label}
+                                        </Text>
+                                      </View>
+                                    ))
+                                ) : (
+                                  <View
+                                    style={{
+                                      backgroundColor: '#f8fafc',
+                                      paddingHorizontal: 8,
+                                      paddingVertical: 4,
+                                      borderRadius: 12,
+                                    }}
+                                  >
+                                    <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                                      No location
+                                    </Text>
+                                  </View>
+                                )}
+                              </View>
+
+                              <Text style={{ color: '#374151', marginTop: 8 }}>
+                                Admin: {adminName}
+                              </Text>
+                            </View>
+
+                            <View style={{ marginLeft: 12, alignItems: 'flex-end' }}>
                               {hasAdmin ? (
                                 <TouchableOpacity
-                                  style={[styles.smallBtn, { backgroundColor: '#10b981' }]}
+                                  style={{ padding: 8 }}
                                   onPress={() => openEdit(s)}
                                 >
-                                  <Text style={{ color: '#fff' }}>View / Edit</Text>
+                                  <Feather name="edit-3" size={18} color="#10b981" />
                                 </TouchableOpacity>
                               ) : (
                                 <TouchableOpacity
-                                  style={styles.smallBtn}
+                                  style={{ padding: 8 }}
                                   onPress={() => openCreateAdmin(s)}
                                 >
-                                  <Text style={{ color: '#fff' }}>Create Admin</Text>
+                                  <Feather name="user-plus" size={18} color="#3b82f6" />
                                 </TouchableOpacity>
                               )}
+                              <TouchableOpacity
+                                style={{ padding: 8 }}
+                                onPress={() => Alert.alert('View', `Open ${s.name} details`)}
+                              >
+                                <Feather name="eye" size={18} color="#6b7280" />
+                              </TouchableOpacity>
                             </View>
                           </View>
                         );
@@ -500,13 +582,110 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                             .join(', ')
                         : '';
                       const societyFallback = admin.society_name || admin.society?.name || '';
+                      const initials = admin.name
+                        ? admin.name
+                            .split(' ')
+                            .map((p: string) => p[0])
+                            .slice(0, 2)
+                            .join('')
+                            .toUpperCase()
+                        : (admin.phone || '').slice(-2);
+
                       return (
-                        <View style={styles.card}>
-                          <Text style={styles.socName}>{admin.name || admin.phone}</Text>
-                          <Text style={styles.socMeta}>Phone: {admin.phone || '-'}</Text>
-                          <Text style={styles.socMeta}>
-                            Society: {societyNames || societyFallback || 'NA'}
-                          </Text>
+                        <View
+                          style={[
+                            styles.card,
+                            {
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              padding: 12,
+                              marginVertical: 6,
+                            },
+                          ]}
+                        >
+                          {/* Avatar / initials */}
+                          <View
+                            style={{
+                              width: 56,
+                              height: 56,
+                              borderRadius: 28,
+                              backgroundColor: '#eef2ff',
+                              justifyContent: 'center',
+                              alignItems: 'center',
+                              marginRight: 12,
+                            }}
+                          >
+                            <Text style={{ fontWeight: '800', color: '#4f46e5', fontSize: 16 }}>
+                              {initials}
+                            </Text>
+                          </View>
+
+                          {/* Main info */}
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 16, fontWeight: '700' }}>
+                              {admin.name || admin.phone}
+                            </Text>
+                            <Text style={{ color: '#6b7280', marginTop: 4 }}>
+                              📞 {admin.phone || '-'}
+                            </Text>
+
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 }}>
+                              {Array.isArray(societiesArr) && societiesArr.length ? (
+                                societiesArr.slice(0, 3).map((s: any, idx: number) => (
+                                  <View
+                                    key={idx}
+                                    style={{
+                                      backgroundColor: '#f3f4ff',
+                                      paddingHorizontal: 8,
+                                      paddingVertical: 4,
+                                      borderRadius: 12,
+                                      marginRight: 6,
+                                      marginBottom: 6,
+                                    }}
+                                  >
+                                    <Text style={{ fontSize: 12, color: '#4f46e5' }}>
+                                      {s.name || s}
+                                    </Text>
+                                  </View>
+                                ))
+                              ) : (
+                                <View
+                                  style={{
+                                    backgroundColor: '#f8fafc',
+                                    paddingHorizontal: 8,
+                                    paddingVertical: 4,
+                                    borderRadius: 12,
+                                  }}
+                                >
+                                  <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                                    {societyFallback || 'NA'}
+                                  </Text>
+                                </View>
+                              )}
+                            </View>
+                          </View>
+
+                          {/* Actions */}
+                          <View style={{ marginLeft: 12, alignItems: 'flex-end' }}>
+                            <TouchableOpacity
+                              style={{ padding: 8 }}
+                              onPress={() =>
+                                Alert.alert('Edit admin', 'Edit functionality not implemented')
+                              }
+                            >
+                              <Feather name="edit-3" size={18} color="#10b981" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={{ padding: 8 }}
+                              onPress={() => {
+                                try {
+                                  Linking.openURL(`tel:${admin.phone}`);
+                                } catch (e) {}
+                              }}
+                            >
+                              <Feather name="phone" size={18} color="#3b82f6" />
+                            </TouchableOpacity>
+                          </View>
                         </View>
                       );
                     }}
@@ -711,6 +890,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                   onEdit={async () => {
                     try {
                       const url = await pickAndUploadProfile();
+                      if (!url) return; // cancelled
                       await api.put('/api/user', { avatar: url });
                       setUserAvatar(url);
                       alert('Profile photo updated');

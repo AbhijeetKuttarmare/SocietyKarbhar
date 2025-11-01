@@ -193,4 +193,21 @@ router.get('/societies/:id', async (req, res) => {
   res.json({ society: soc });
 });
 
+// Summary for superadmin dashboard - returns totals across all societies
+router.get('/summary', async (req, res) => {
+  try {
+    const models = require('../models');
+    const { User, Society, Building } = models;
+    const totalSocieties = await Society.count();
+    const totalOwners = await User.count({ where: { role: 'owner' } });
+    const totalTenants = await User.count({ where: { role: 'tenant' } });
+    const totalAdmins = await User.count({ where: { role: 'admin' } });
+    const totalBuildings = await Building.count();
+    res.json({ totalSocieties, totalOwners, totalTenants, totalAdmins, totalBuildings });
+  } catch (e) {
+    console.error('superadmin summary failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
 module.exports = router;

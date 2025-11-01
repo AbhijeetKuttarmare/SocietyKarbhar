@@ -11,6 +11,7 @@ const {
   Notice,
   NoticeRecipient,
   Complaint,
+  Bill,
 } = require('../models');
 const bcrypt = require('bcrypt');
 const { authenticate, authorize } = require('../middlewares/auth');
@@ -68,13 +69,88 @@ router.get('/societies', async (req, res) => {
   res.json({ societies });
 });
 
-// Get owners or tenants
+// Get owners or tenants grouped by wing and flat
 router.get('/users', async (req, res) => {
-  const { role } = req.query;
-  const where = { societyId: req.user.societyId };
-  if (role) where.role = role;
-  const users = await User.findAll({ where });
-  res.json({ users });
+  try {
+    const { role } = req.query;
+    const Op = require('sequelize').Op;
+
+    // Fetch wings with flats and their associations
+    const wings = await Building.findAll({
+      where: { societyId: req.user.societyId },
+      include: [
+        {
+          model: Flat,
+          required: false, // Use LEFT JOIN
+          include: [
+            {
+              model: User,
+              as: 'owner',
+              required: false,
+            },
+            {
+              model: Agreement,
+              required: false,
+              include: [
+                {
+                  model: User,
+                  as: 'tenant',
+                  required: false,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      order: [
+        ['name', 'ASC'],
+        [Flat, 'flat_no', 'ASC'],
+      ], // Order by wing name and flat number
+    });
+
+    // Structure the response with proper error handling for null values
+    const structuredData = wings
+      .map((wing) => {
+        // Ensure Flats exists and is an array
+        const flats = wing.Flats || [];
+
+        return {
+          id: wing.id,
+          name: wing.name || `Wing ${wing.id}`,
+          flats: flats
+            .map((flat) => {
+              // Collect tenants from agreements, handling null cases
+              const tenants = (flat.Agreements || [])
+                .map((agreement) => agreement.tenant)
+                .filter((tenant) => tenant !== null);
+
+              return {
+                id: flat.id,
+                flat_no: flat.flat_no,
+                owner: flat.owner || null,
+                users: [...(flat.owner ? [flat.owner] : []), ...tenants].filter(
+                  (user) => user !== null
+                ),
+              };
+            })
+            .filter((flat) => flat !== null),
+        };
+      })
+      .filter((wing) => wing !== null);
+
+    // Log the response size to help debug
+    const responseSize = JSON.stringify(structuredData).length;
+    console.log(`Returning ${structuredData.length} wings with data size ${responseSize} bytes`);
+
+    res.json({ wings: structuredData });
+  } catch (err) {
+    console.error('Error fetching users:', err);
+    res.status(500).json({
+      error: 'Failed to fetch users',
+      detail: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    });
+  }
 });
 
 // Update user
@@ -247,12 +323,10 @@ router.get('/getFlatsByWing/:wingId', async (req, res) => {
 
     if (!hasBuildingId) {
       // Migration not applied — return a helpful error instead of a 500
-      return res
-        .status(400)
-        .json({
-          error: 'schema_missing',
-          detail: 'flats.buildingId column not found; run migrations',
-        });
+      return res.status(400).json({
+        error: 'schema_missing',
+        detail: 'flats.buildingId column not found; run migrations',
+      });
     }
 
     const flats = await Flat.findAll({
@@ -553,6 +627,302 @@ router.get('/complaints', async (req, res) => {
   }
 });
 
+// Admin: maintenance fees summary grouped by owner (raiser)
+// Query params:
+// - month=YYYY-MM (optional, defaults to current month)
+// - status=paid|unpaid|all (optional, defaults to all)
+router.get('/maintenance-fees', async (req, res) => {
+  try {
+    const { month, status } = req.query;
+    const Op = require('sequelize').Op;
+
+    // compute month range
+    let startDate, endDate;
+    if (month) {
+      // expect YYYY-MM
+      const parts = String(month).split('-');
+      if (parts.length !== 2) return res.status(400).json({ error: 'month must be YYYY-MM' });
+      const [y, m] = parts.map((p) => Number(p));
+      if (!y || !m || m < 1 || m > 12) return res.status(400).json({ error: 'invalid month' });
+      startDate = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(y, m, 1, 0, 0, 0)); // exclusive
+    } else {
+      const now = new Date();
+      startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0));
+    }
+
+    const where = { societyId: req.user.societyId };
+    // Only include bills raised by this admin (raised_by)
+    where.raised_by = req.user.id;
+    where.createdAt = { [Op.gte]: startDate, [Op.lt]: endDate };
+
+    // status filter: consider 'closed' as paid
+    let statusFilter = null;
+    if (status === 'paid') statusFilter = { status: 'closed' };
+    else if (status === 'unpaid') statusFilter = { status: { [Op.ne]: 'closed' } };
+    if (statusFilter) Object.assign(where, statusFilter);
+
+    // fetch bills in the month for this society (include raiser info)
+    const bills = await Bill.findAll({
+      where,
+      include: [
+        { model: User, as: 'raiser', attributes: ['id', 'name', 'phone'] },
+        { model: User, as: 'assignee', attributes: ['id', 'name', 'phone'] },
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: 5000,
+    });
+
+    // group by raiser (raised_by) OR by assignee for maintenance-type bills
+    // If bill.type === 'maintenance' we group by assigned_to (owner), otherwise by raiser.
+    const groupsMap = {};
+    let totalAmount = 0;
+    let totalPaid = 0;
+    let totalCount = 0;
+
+    bills.forEach((b) => {
+      const cost = Number(b.cost) || 0;
+      totalAmount += cost;
+      const isPaid = String(b.status).toLowerCase() === 'closed';
+      if (isPaid) totalPaid += cost;
+      totalCount += 1;
+
+      // choose grouping key & label depending on bill type
+      let groupKey, labelId, labelName, labelPhone;
+      if (String(b.type).toLowerCase() === 'maintenance') {
+        // group by assignee (owner)
+        labelId = (b.assignee && b.assignee.id) || b.assigned_to || 'unknown';
+        labelName = (b.assignee && b.assignee.name) || 'Unknown Owner';
+        labelPhone = (b.assignee && b.assignee.phone) || null;
+        groupKey = String(labelId || 'unknown');
+      } else {
+        labelId = (b.raiser && b.raiser.id) || b.raised_by || 'unknown';
+        labelName = (b.raiser && b.raiser.name) || 'Unknown';
+        labelPhone = (b.raiser && b.raiser.phone) || null;
+        groupKey = String(labelId || 'unknown');
+      }
+
+      if (!groupsMap[groupKey]) {
+        groupsMap[groupKey] = {
+          id: labelId,
+          name: labelName,
+          phone: labelPhone,
+          totalBills: 0,
+          totalAmount: 0,
+          paidAmount: 0,
+          unpaidAmount: 0,
+          bills: [],
+        };
+      }
+
+      groupsMap[groupKey].totalBills += 1;
+      groupsMap[groupKey].totalAmount += cost;
+      if (isPaid) groupsMap[groupKey].paidAmount += cost;
+      else groupsMap[groupKey].unpaidAmount += cost;
+      groupsMap[groupKey].bills.push({
+        id: b.id,
+        title: b.title,
+        description: b.description,
+        cost: cost,
+        type: b.type,
+        status: b.status,
+        assigned_to: b.assigned_to,
+        payment_proof_url: b.payment_proof_url,
+        createdAt: b.createdAt,
+      });
+    });
+
+    const groups = Object.keys(groupsMap).map((k) => groupsMap[k]);
+
+    res.json({
+      totals: {
+        totalAmount,
+        totalPaid,
+        totalUnpaid: totalAmount - totalPaid,
+        totalCount,
+      },
+      groups,
+    });
+  } catch (e) {
+    console.error('maintenance-fees failed', e && e.stack);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Admin: list bills for this society (with optional filters)
+// Query params: month=YYYY-MM, status=closed|open|payment_pending|all, ownerId (assigned_to)
+router.get('/bills', async (req, res) => {
+  try {
+    const { month, status, ownerId } = req.query;
+    const Op = require('sequelize').Op;
+    const where = { societyId: req.user.societyId };
+
+    if (status && status !== 'all') {
+      where.status = status;
+    }
+
+    if (ownerId) where.assigned_to = ownerId;
+
+    if (month) {
+      const parts = String(month).split('-');
+      if (parts.length === 2) {
+        const [y, m] = parts.map((p) => Number(p));
+        if (y && m) {
+          const startDate = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
+          const endDate = new Date(Date.UTC(y, m, 1, 0, 0, 0));
+          where.createdAt = { [Op.gte]: startDate, [Op.lt]: endDate };
+        }
+      }
+    }
+
+    const bills = await Bill.findAll({
+      where,
+      include: [
+        { model: User, as: 'raiser', attributes: ['id', 'name', 'phone'] },
+        { model: User, as: 'assignee', attributes: ['id', 'name', 'phone'] },
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: 5000,
+    });
+    res.json({ bills });
+  } catch (e) {
+    console.error('admin list bills failed', e && e.stack);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Admin: get/set maintenance setting for this society
+router.get('/maintenance-settings', async (req, res) => {
+  try {
+    const setting = await require('../models').MaintenanceSetting.findOne({
+      where: { societyId: req.user.societyId },
+    });
+    res.json({ setting });
+  } catch (e) {
+    console.error('get maintenance settings failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+router.post('/maintenance-settings', async (req, res) => {
+  try {
+    const { amount, effective_from } = req.body;
+    if (amount === undefined || amount === null)
+      return res.status(400).json({ error: 'amount required' });
+    const MaintenanceSetting = require('../models').MaintenanceSetting;
+    let setting = await MaintenanceSetting.findOne({ where: { societyId: req.user.societyId } });
+    if (setting) {
+      await setting.update({ amount: Number(amount) || 0, effective_from: effective_from || null });
+    } else {
+      setting = await MaintenanceSetting.create({
+        societyId: req.user.societyId,
+        amount: Number(amount) || 0,
+        effective_from: effective_from || null,
+      });
+    }
+    res.json({ setting });
+  } catch (e) {
+    console.error('set maintenance settings failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Admin: generate monthly maintenance bills for all owners
+// body: { month: 'YYYY-MM' (optional), amount: integer (optional override) }
+router.post('/generate-monthly-maintenance', async (req, res) => {
+  try {
+    const { month, amount, ownersOnly } = req.body || {};
+    const Op = require('sequelize').Op;
+    // determine month range
+    let startDate, endDate, monthLabel;
+    if (month) {
+      const parts = String(month).split('-');
+      if (parts.length !== 2) return res.status(400).json({ error: 'month must be YYYY-MM' });
+      const [y, m] = parts.map((p) => Number(p));
+      startDate = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(y, m, 1, 0, 0, 0));
+      monthLabel = `${y}-${String(m).padStart(2, '0')}`;
+    } else {
+      const now = new Date();
+      startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0));
+      monthLabel = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+
+    // resolve amount: override, otherwise from MaintenanceSetting
+    let finalAmount = amount;
+    if (finalAmount === undefined || finalAmount === null) {
+      const MaintenanceSetting = require('../models').MaintenanceSetting;
+      const setting = await MaintenanceSetting.findOne({
+        where: { societyId: req.user.societyId },
+      });
+      finalAmount = setting ? Number(setting.amount) || 0 : 0;
+    }
+
+    // fetch society members: either owners only or owners+tenants
+    let membersWhere = { societyId: req.user.societyId };
+    if (ownersOnly) {
+      membersWhere.role = 'owner';
+    } else {
+      membersWhere.role = { [Op.in]: ['owner', 'tenant'] };
+    }
+    const members = await User.findAll({ where: membersWhere });
+    const created = [];
+    const skipped = [];
+    for (const owner of members) {
+      // skip if a maintenance bill already exists for the owner in this month
+      const exists = await Bill.findOne({
+        where: {
+          societyId: req.user.societyId,
+          assigned_to: owner.id,
+          type: 'maintenance',
+          createdAt: { [Op.gte]: startDate, [Op.lt]: endDate },
+        },
+      });
+      if (exists) {
+        skipped.push({ ownerId: owner.id });
+        continue;
+      }
+      const b = await Bill.create({
+        title: `Monthly Maintenance - ${monthLabel}`,
+        description: `Maintenance for ${monthLabel}`,
+        type: 'maintenance',
+        status: 'open',
+        cost: Number(finalAmount) || 0,
+        societyId: req.user.societyId,
+        raised_by: req.user.id,
+        assigned_to: owner.id,
+      });
+      created.push(b);
+    }
+
+    res.json({ created: created.length, skipped: skipped.length, items: created.slice(0, 200) });
+  } catch (e) {
+    console.error('generate monthly maintenance failed', e && e.stack);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Admin: verify a bill (mark paid/mark unpaid)
+router.post('/bills/:id/verify', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action } = req.body; // 'approve' | 'reject'
+    if (!['approve', 'reject'].includes(action))
+      return res.status(400).json({ error: 'invalid action' });
+    const bill = await Bill.findByPk(id);
+    if (!bill || bill.societyId !== req.user.societyId)
+      return res.status(404).json({ error: 'not found' });
+    if (action === 'approve') await bill.update({ status: 'closed' });
+    else await bill.update({ status: 'open' });
+    res.json({ bill });
+  } catch (e) {
+    console.error('admin verify bill failed', e && e.stack);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
 // Documents for a user (owner or tenant)
 router.get('/users/:id/documents', async (req, res) => {
   const { id } = req.params;
@@ -597,8 +967,24 @@ router.post('/agreements', async (req, res) => {
 });
 
 router.get('/agreements', async (req, res) => {
-  const ags = await Agreement.findAll({ where: {}, limit: 200 });
-  res.json({ agreements: ags });
+  try {
+    const { flatId, flatIds } = req.query;
+    const where = {};
+    if (flatId) where.flatId = flatId;
+    else if (flatIds) {
+      // allow comma-separated list
+      const ids = String(flatIds)
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean);
+      if (ids.length) where.flatId = ids;
+    }
+    const ags = await Agreement.findAll({ where, limit: 200 });
+    res.json({ agreements: ags });
+  } catch (e) {
+    console.error('list agreements failed', e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
 });
 
 // User history: find actions via documents + agreements

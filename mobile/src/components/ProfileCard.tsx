@@ -30,7 +30,16 @@ export default function ProfileCard({
           {onEdit ? (
             <TouchableOpacity
               style={styles.editBtn}
-              onPress={onEdit}
+              onPress={() => {
+                try {
+                  console.debug('[ProfileCard] edit button pressed');
+                } catch (e) {}
+                try {
+                  onEdit();
+                } catch (e) {
+                  console.error('[ProfileCard] onEdit threw', e);
+                }
+              }}
               accessibilityLabel="Edit profile photo"
             >
               <Ionicons name="camera" size={14} color="#fff" />

@@ -42,4 +42,26 @@ router.get('/me', authenticate, async (req, res) => {
   }
 });
 
+// Update current authenticated user (partial update)
+router.put('/', authenticate, async (req, res) => {
+  try {
+    const models = require('../models');
+    const userId = req.user && req.user.id;
+    if (!userId) return res.status(401).json({ error: 'not authenticated' });
+
+    const allowed = ['name', 'phone', 'avatar', 'address'];
+    const payload = {};
+    for (const k of allowed) if (typeof req.body[k] !== 'undefined') payload[k] = req.body[k];
+
+    const u = await models.User.findByPk(userId);
+    if (!u) return res.status(404).json({ error: 'user not found' });
+    await u.update(payload);
+    const out = u.get ? u.get({ plain: true }) : u;
+    return res.json({ user: out });
+  } catch (err) {
+    console.error('[user] update error', err && (err.stack || err));
+    return res.status(500).json({ error: 'internal server error' });
+  }
+});
+
 module.exports = router;
