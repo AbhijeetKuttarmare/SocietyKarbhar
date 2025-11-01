@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import ProfileCard from '../components/ProfileCard';
 import * as FileSystem from 'expo-file-system';
 import api, { setAuthHeader, attachErrorHandler } from '../services/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 
 type Props = {
@@ -282,6 +283,26 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
     (user as any)?.avatar || (user as any)?.image
   );
+  // Local editable owner profile state (so owner can edit and save their details)
+  const [ownerProfile, setOwnerProfile] = useState<any>({
+    name: (user as any)?.name || '',
+    phone: (user as any)?.phone || (user as any)?.mobile_number || '',
+    email: (user as any)?.email || '',
+    address: (user as any)?.address || '',
+    emergency_contact: (user as any)?.emergency_contact || '',
+  });
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  useEffect(() => {
+    // keep local editable profile in sync when parent `user` prop changes
+    setOwnerProfile({
+      name: (user as any)?.name || '',
+      phone: (user as any)?.phone || (user as any)?.mobile_number || '',
+      email: (user as any)?.email || '',
+      address: (user as any)?.address || '',
+      emergency_contact: (user as any)?.emergency_contact || '',
+    });
+  }, [user]);
 
   // Derived tenant lists / due map
   const filteredTenants = useMemo(() => {
@@ -1474,17 +1495,118 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               <Text style={styles.sectionTitle}>Profile</Text>
               <View style={{ marginTop: 8 }}>
                 <Text style={styles.label}>Name</Text>
-                <TextInput style={styles.input} value={user?.name || ''} />
+                <TextInput
+                  style={styles.input}
+                  value={ownerProfile.name}
+                  onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), name: t }))}
+                />
+
                 <Text style={styles.label}>Phone</Text>
                 <TextInput
                   style={styles.input}
-                  value={user?.phone || ''}
+                  value={ownerProfile.phone}
+                  onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), phone: t }))}
                   keyboardType="phone-pad"
                 />
+
+                <Text style={styles.label}>Full address</Text>
+                <TextInput
+                  style={styles.input}
+                  value={ownerProfile.address}
+                  onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), address: t }))}
+                />
+
+                <Text style={styles.label}>Email address</Text>
+                <TextInput
+                  style={styles.input}
+                  value={ownerProfile.email}
+                  onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), email: t }))}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+
+                <Text style={styles.label}>Emergency contact number</Text>
+                <TextInput
+                  style={styles.input}
+                  value={ownerProfile.emergency_contact}
+                  onChangeText={(t) =>
+                    setOwnerProfile((s: any) => ({ ...(s || {}), emergency_contact: t }))
+                  }
+                  keyboardType="phone-pad"
+                />
+
                 <View style={{ height: 12 }} />
-                <TouchableOpacity style={styles.smallBtn}>
-                  <Text style={{ color: '#fff' }}>Change Password</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TouchableOpacity
+                    style={styles.smallBtn}
+                    onPress={async () => {
+                      try {
+                        setSavingProfile(true);
+                        const payload: any = {
+                          name: ownerProfile.name || null,
+                          phone: ownerProfile.phone || null,
+                          email: ownerProfile.email || null,
+                          address: ownerProfile.address || null,
+                          emergency_contact: ownerProfile.emergency_contact || null,
+                        };
+                        // remove nulls (backend expects only sent fields)
+                        Object.keys(payload).forEach((k) => {
+                          if (payload[k] === null) delete payload[k];
+                        });
+                        const r = await api.put('/api/user', payload);
+                        if (r && r.data && r.data.user) {
+                          const u = r.data.user;
+                          setOwnerProfile({
+                            name: u.name || '',
+                            phone: u.phone || u.mobile_number || '',
+                            email: u.email || '',
+                            address: u.address || '',
+                            emergency_contact: u.emergency_contact || '',
+                          });
+                          setUserAvatar(u.avatar || u.image || userAvatar);
+                          try {
+                            await AsyncStorage.setItem('user', JSON.stringify(u));
+                          } catch (e) {}
+                        }
+                        alert('Profile saved');
+                      } catch (e: any) {
+                        console.warn(
+                          'save owner profile failed',
+                          e && (e.response?.data || e.message)
+                        );
+                        alert('Failed to save profile');
+                      } finally {
+                        setSavingProfile(false);
+                      }
+                    }}
+                    disabled={savingProfile}
+                  >
+                    {savingProfile ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={{ color: '#fff' }}>Save</Text>
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.smallBtnClose}
+                    onPress={() =>
+                      setOwnerProfile({
+                        name: (user as any)?.name || '',
+                        phone: (user as any)?.phone || (user as any)?.mobile_number || '',
+                        email: (user as any)?.email || '',
+                        address: (user as any)?.address || '',
+                        emergency_contact: (user as any)?.emergency_contact || '',
+                      })
+                    }
+                  >
+                    <Text style={styles.closeText}>Reset</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity style={styles.smallBtn}>
+                    <Text style={{ color: '#fff' }}>Change Password</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           )}
@@ -2017,11 +2139,17 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
           <View style={[styles.modalContent, { maxWidth: 420 }]}>
             <Text style={{ fontWeight: '800', fontSize: 18, marginBottom: 8 }}>Profile</Text>
             <ProfileCard
-              name={user?.name}
-              phone={user?.phone}
-              email={user?.email}
-              address={user?.address || ''}
-              imageUri={userAvatar || user?.avatar || user?.image}
+              name={ownerProfile?.name || user?.name}
+              phone={ownerProfile?.phone || user?.phone}
+              email={ownerProfile?.email || user?.email}
+              address={ownerProfile?.address || user?.address || ''}
+              imageUri={
+                userAvatar ||
+                ownerProfile?.avatar ||
+                ownerProfile?.image ||
+                user?.avatar ||
+                user?.image
+              }
               onEdit={async () => {
                 try {
                   console.debug('[OwnerScreen] starting profile pickAndUploadProfile');
@@ -2030,7 +2158,22 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   if (!url) return; // cancelled
                   const r = await api.put('/api/user', { avatar: url });
                   console.debug('[OwnerScreen] PUT /api/user response', r && r.data);
-                  setUserAvatar(url);
+                  if (r && r.data && r.data.user) {
+                    const u = r.data.user;
+                    setUserAvatar(u.avatar || u.image || url);
+                    setOwnerProfile({
+                      name: u.name || '',
+                      phone: u.phone || u.mobile_number || '',
+                      email: u.email || '',
+                      address: u.address || '',
+                      emergency_contact: u.emergency_contact || '',
+                    });
+                    try {
+                      await AsyncStorage.setItem('user', JSON.stringify(u));
+                    } catch (e) {}
+                  } else {
+                    setUserAvatar(url);
+                  }
                   alert('Profile photo updated');
                 } catch (err: any) {
                   // show detailed error for debugging in dev
@@ -2049,6 +2192,105 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 } catch (e) {}
               }}
             />
+            {/* Editable fields shown inside the Profile modal so owner can edit inline */}
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.label}>Full address</Text>
+              <TextInput
+                style={styles.input}
+                value={ownerProfile.address}
+                onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), address: t }))}
+              />
+
+              <Text style={styles.label}>Email address</Text>
+              <TextInput
+                style={styles.input}
+                value={ownerProfile.email}
+                onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), email: t }))}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+
+              <Text style={styles.label}>Emergency contact number</Text>
+              <TextInput
+                style={styles.input}
+                value={ownerProfile.emergency_contact}
+                onChangeText={(t) =>
+                  setOwnerProfile((s: any) => ({ ...(s || {}), emergency_contact: t }))
+                }
+                keyboardType="phone-pad"
+              />
+
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+                <TouchableOpacity
+                  style={[styles.smallBtnClose, { marginRight: 8 }]}
+                  onPress={() =>
+                    setOwnerProfile({
+                      name: (user as any)?.name || '',
+                      phone: (user as any)?.phone || (user as any)?.mobile_number || '',
+                      email: (user as any)?.email || '',
+                      address: (user as any)?.address || '',
+                      emergency_contact: (user as any)?.emergency_contact || '',
+                    })
+                  }
+                >
+                  <Text style={styles.closeText}>Reset</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.smallBtn}
+                  onPress={async () => {
+                    try {
+                      setSavingProfile(true);
+                      const payload: any = {
+                        name: ownerProfile.name || null,
+                        phone: ownerProfile.phone || null,
+                        email: ownerProfile.email || null,
+                        address: ownerProfile.address || null,
+                        emergency_contact: ownerProfile.emergency_contact || null,
+                      };
+                      Object.keys(payload).forEach((k) => {
+                        if (payload[k] === null) delete payload[k];
+                      });
+                      const r = await api.put('/api/user', payload);
+                      // If server returns updated user, update local state and persist
+                      if (r && r.data && r.data.user) {
+                        const u = r.data.user;
+                        setOwnerProfile({
+                          name: u.name || '',
+                          phone: u.phone || u.mobile_number || '',
+                          email: u.email || '',
+                          address: u.address || '',
+                          emergency_contact: u.emergency_contact || '',
+                        });
+                        setUserAvatar(u.avatar || u.image || userAvatar);
+                        try {
+                          await AsyncStorage.setItem('user', JSON.stringify(u));
+                        } catch (e) {
+                          /* ignore persistence errors */
+                        }
+                      }
+                      alert('Profile saved');
+                      // close modal to reflect updated profile
+                      setShowProfileModal(false);
+                    } catch (e: any) {
+                      console.warn(
+                        'save owner profile failed',
+                        e && (e.response?.data || e.message)
+                      );
+                      alert('Failed to save profile');
+                    } finally {
+                      setSavingProfile(false);
+                    }
+                  }}
+                >
+                  {savingProfile ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={{ color: '#fff' }}>Save</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
             {/* Aadhaar / ID documents if available (show view/upload buttons) */}
             <View style={{ marginTop: 12 }}>
               <Text style={{ fontWeight: '700' }}>Aadhaar / ID</Text>
@@ -2132,21 +2374,6 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               })()}
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-              {/* Dev helper: test backend connectivity from the client (visible in dev builds) */}
-              <TouchableOpacity
-                style={[styles.smallBtnClose, { marginRight: 8 }]}
-                onPress={async () => {
-                  try {
-                    const res = await (await import('../services/api')).testConnectivity();
-                    alert('Connectivity: ' + JSON.stringify(res));
-                  } catch (e: any) {
-                    alert('Connectivity test failed: ' + (e && (e.message || e)));
-                  }
-                }}
-              >
-                <Text style={styles.closeText}>Test backend</Text>
-              </TouchableOpacity>
-
               <TouchableOpacity
                 style={[styles.smallBtnClose, { marginRight: 8 }]}
                 onPress={() => setShowProfileModal(false)}

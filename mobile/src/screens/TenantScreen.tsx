@@ -42,7 +42,14 @@ export default function TenantScreen({ user, onLogout }: Props) {
     | 'complaints'
     | 'helplines'
   >('home');
-  const [profile, setProfile] = useState<any>(user || { name: '', phone: '' });
+  const [profile, setProfile] = useState<any>(
+    user || { name: '', phone: '', email: '', address: '', emergency_contact: '' }
+  );
+
+  useEffect(() => {
+    // keep local profile in sync if parent `user` prop changes
+    setProfile(user || { name: '', phone: '', email: '', address: '', emergency_contact: '' });
+  }, [user]);
   const [ownerProfile, setOwnerProfile] = useState<any | null>(null);
   const [documents, setDocuments] = useState<any[]>([]);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -52,7 +59,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
   const [uploadingDocId, setUploadingDocId] = useState<string | null>(null);
 
   // UI state for various modals and tenant lists (minimal defaults to satisfy render)
-  const [showSidebar, setShowSidebar] = useState(false);
+  // sidebar removed for tenants (no drawer/menu)
   const [showNoticeModal, setShowNoticeModal] = useState(false);
   const [noticesCount, setNoticesCount] = useState(0);
   const [notices, setNotices] = useState<any[]>([]);
@@ -61,6 +68,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
 
   const [agreements, setAgreements] = useState<any[]>([]);
   const [maintenance, setMaintenance] = useState<any[]>([]);
+  const [maintenanceFilter, setMaintenanceFilter] = useState<'all' | 'bills' | 'complaints'>('all');
   const [rentHistory, setRentHistory] = useState<any[]>([]);
 
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
@@ -95,25 +103,56 @@ export default function TenantScreen({ user, onLogout }: Props) {
     try {
       const payload: any = { title: complaintForm.title, description: complaintForm.description };
       if (complaintForm.image) payload.file_url = complaintForm.image;
+      // Prefer dedicated complaints endpoint. If not available, fall back to maintenance endpoints for older servers.
+      let posted = false;
       try {
-        const r = await api.post('/api/tenant/maintenance', payload);
-        if (r && r.data && (r.data.complaint || r.data.maintenance)) {
-          const c = r.data.complaint || r.data.maintenance;
+        const r = await api.post('/api/tenant/complaints', payload);
+        if (r && r.data && (r.data.complaint || r.data.complaints)) {
+          const c = r.data.complaint || r.data.complaints;
           setComplaints((s) => [c, ...s]);
+          posted = true;
         }
       } catch (err) {
-        // try owner endpoint as a fallback
+        // ignore and try maintenance fallback
+      }
+
+      if (!posted) {
         try {
-          const r2 = await api.post('/api/owner/maintenance', payload);
-          if (r2 && r2.data && r2.data.maintenance)
-            setComplaints((s) => [r2.data.maintenance, ...s]);
-        } catch (e2) {
-          // optimistic local fallback
-          setComplaints((s) => [
-            { id: String(Date.now()), ...payload, status: 'open', raised_by: profile?.id || 'me' },
-            ...s,
-          ]);
+          const r = await api.post('/api/tenant/maintenance', payload);
+          if (r && r.data && (r.data.complaint || r.data.maintenance)) {
+            const c = r.data.complaint || r.data.maintenance;
+            setComplaints((s) => [c, ...s]);
+            posted = true;
+          }
+        } catch (err2) {
+          // try owner-scoped endpoints as last network fallback
+          try {
+            const r2 = await api.post('/api/owner/complaints', payload);
+            if (r2 && r2.data && (r2.data.complaint || r2.data.complaints)) {
+              const c2 = r2.data.complaint || r2.data.complaints;
+              setComplaints((s) => [c2, ...s]);
+              posted = true;
+            }
+          } catch (e2) {
+            try {
+              const r3 = await api.post('/api/owner/maintenance', payload);
+              if (r3 && r3.data && r3.data.maintenance) {
+                setComplaints((s) => [r3.data.maintenance, ...s]);
+                posted = true;
+              }
+            } catch (e3) {
+              /* network fallback below */
+            }
+          }
         }
+      }
+
+      if (!posted) {
+        // optimistic local fallback when no server endpoint is reachable
+        setComplaints((s) => [
+          { id: String(Date.now()), ...payload, status: 'open', raised_by: profile?.id || 'me' },
+          ...s,
+        ]);
       }
       setShowComplaintModal(false);
       setComplaintForm({ title: '', description: '', image: '' });
@@ -144,8 +183,25 @@ export default function TenantScreen({ user, onLogout }: Props) {
     fetchNotices();
     loadLocalData();
     fetchDocuments();
-    if (user && user.role === 'tenant') fetchOwner();
+    if (user && user.role === 'tenant') {
+      fetchOwner();
+      // also load tenant complaints so the complaints tab shows data
+      fetchComplaints();
+      // load maintenance which includes bills assigned to this tenant (bills raised by owner)
+      fetchMaintenance();
+    }
+    // always fetch helplines so both tenant and owner see the same list
+    try {
+      fetchHelplines();
+    } catch (e) {
+      /* ignore */
+    }
   }, []);
+
+  // refresh complaints whenever the complaints tab is shown
+  useEffect(() => {
+    if (tab === 'complaints') fetchComplaints();
+  }, [tab]);
 
   async function fetchDocuments() {
     try {
@@ -196,10 +252,13 @@ export default function TenantScreen({ user, onLogout }: Props) {
   // profile save helper used by the Save button
   async function saveProfile() {
     try {
-      const payload = {
+      const payload: any = {
         name: profile?.name,
         phone: profile?.phone,
         address: profile?.address,
+        // include new fields so backend persists them
+        email: profile?.email,
+        emergency_contact: profile?.emergency_contact,
       };
       const r = await api.put('/api/user', payload);
       // if server returned updated user, update local profile and persisted storage so reloads show latest avatar
@@ -228,6 +287,24 @@ export default function TenantScreen({ user, onLogout }: Props) {
       if (r && r.data && Array.isArray(r.data.maintenance)) setMaintenance(r.data.maintenance);
     } catch (e) {
       console.warn('fetch maintenance failed', e);
+    }
+  }
+
+  async function fetchComplaints() {
+    try {
+      const r = await api.get('/api/tenant/complaints');
+      if (r && r.data && Array.isArray(r.data.complaints)) setComplaints(r.data.complaints);
+    } catch (e) {
+      console.warn('fetch complaints failed', e);
+    }
+  }
+
+  async function fetchHelplines() {
+    try {
+      const r = await api.get('/api/tenant/helplines');
+      setHelplines(r.data.helplines || r.data || []);
+    } catch (e) {
+      console.warn('tenant fetch helplines failed', e);
     }
   }
 
@@ -278,59 +355,70 @@ export default function TenantScreen({ user, onLogout }: Props) {
   }
 
   // small render helpers
-  const StatCard = ({ title, value, icon }: any) => (
-    <View style={styles.statCard}>
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <View style={styles.iconCircle}>
-          <Ionicons name={icon || 'wallet'} size={18} color="#fff" />
-        </View>
-        <Text style={styles.statTitle}>{title}</Text>
-      </View>
-
-      {/* Inline preview overlay for Tenant profile */}
-      {showPreviewModal && (
-        <View
-          style={{
-            position: 'absolute',
-            top: 12,
-            left: 12,
-            right: 12,
-            bottom: 12,
-            backgroundColor: 'rgba(0,0,0,0.85)',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            borderRadius: 10,
-            padding: 12,
-          }}
-        >
-          {previewImageUrl ? (
-            <Image
-              source={{ uri: previewImageUrl }}
-              style={{
-                width: '100%',
-                height: '80%',
-                resizeMode: 'contain',
-                backgroundColor: '#000',
-              }}
-            />
-          ) : (
-            <Text style={{ color: '#fff' }}>No preview available</Text>
-          )}
-          <View style={{ marginTop: 8 }}>
-            <Button
-              title="Close"
-              onPress={() => {
-                setShowPreviewModal(false);
-                setPreviewImageUrl(null);
-              }}
-            />
+  const StatCard = ({ title, value, icon, onPress }: any) => {
+    const Content = (
+      <View style={styles.statCard}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <View style={styles.iconCircle}>
+            <Ionicons name={icon || 'wallet'} size={18} color="#fff" />
           </View>
+          <Text style={styles.statTitle}>{title}</Text>
         </View>
-      )}
-      <Text style={styles.statValue}>{value}</Text>
-    </View>
-  );
+
+        {/* Inline preview overlay for Tenant profile */}
+        {showPreviewModal && (
+          <View
+            style={{
+              position: 'absolute',
+              top: 12,
+              left: 12,
+              right: 12,
+              bottom: 12,
+              backgroundColor: 'rgba(0,0,0,0.85)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 9999,
+              borderRadius: 10,
+              padding: 12,
+            }}
+          >
+            {previewImageUrl ? (
+              <Image
+                source={{ uri: previewImageUrl }}
+                style={{
+                  width: '100%',
+                  height: '80%',
+                  resizeMode: 'contain',
+                  backgroundColor: '#000',
+                }}
+              />
+            ) : (
+              <Text style={{ color: '#fff' }}>No preview available</Text>
+            )}
+            <View style={{ marginTop: 8 }}>
+              <Button
+                title="Close"
+                onPress={() => {
+                  setShowPreviewModal(false);
+                  setPreviewImageUrl(null);
+                }}
+              />
+            </View>
+          </View>
+        )}
+        <Text style={styles.statValue}>{value}</Text>
+      </View>
+    );
+
+    if (onPress) {
+      return (
+        <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+          {Content}
+        </TouchableOpacity>
+      );
+    }
+    return Content;
+  };
 
   // derive header values here (ownerProfile may be available after fetch)
   const societyName =
@@ -366,57 +454,44 @@ export default function TenantScreen({ user, onLogout }: Props) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      {/* mobile top bar */}
-      {isMobile && (
-        <View style={styles.topBar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <TouchableOpacity
-              onPress={() => setShowSidebar(true)}
-              style={{ marginRight: 12 }}
-              accessibilityLabel="Open menu"
-            >
-              <Ionicons name="menu" size={22} color="#111" />
-            </TouchableOpacity>
-            <View>
-              <Text style={styles.appTitle}>{societyName}</Text>
-              {wingFlat ? <Text style={styles.headerSub}>{wingFlat}</Text> : null}
-            </View>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <TouchableOpacity
-              onPress={() => {
-                fetchNotices();
-                setShowNoticeModal(true);
-              }}
-              style={{ marginRight: 12 }}
-            >
-              <Ionicons name="notifications" size={22} color="#111" />
-              {noticesCount > 0 ? (
-                <View style={styles.badge}>
-                  <Text style={{ color: '#fff', fontSize: 11 }}>{noticesCount}</Text>
-                </View>
-              ) : null}
-            </TouchableOpacity>
-            {/* If user is owner, allow quick switch to Owner dashboard for testing */}
-            {user && user.role === 'owner' ? (
-              <TouchableOpacity
-                onPress={() => setShowOwnerDashboard((s) => !s)}
-                style={{ marginRight: 12 }}
-                accessibilityLabel="Open owner dashboard"
-              >
-                <Ionicons
-                  name="settings"
-                  size={22}
-                  color={showOwnerDashboard ? '#6C5CE7' : '#111'}
-                />
-              </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity onPress={onLogout}>
-              <Ionicons name="log-out-outline" size={22} color="#111" />
-            </TouchableOpacity>
+      {/* top bar (no hamburger menu for tenants) */}
+      <View style={styles.topBar}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <View>
+            <Text style={styles.appTitle}>{societyName}</Text>
+            {wingFlat ? <Text style={styles.headerSub}>{wingFlat}</Text> : null}
           </View>
         </View>
-      )}
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity
+            onPress={() => {
+              fetchNotices();
+              setShowNoticeModal(true);
+            }}
+            style={{ marginRight: 12 }}
+          >
+            <Ionicons name="notifications" size={22} color="#111" />
+            {noticesCount > 0 ? (
+              <View style={styles.badge}>
+                <Text style={{ color: '#fff', fontSize: 11 }}>{noticesCount}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+          {/* If user is owner, allow quick switch to Owner dashboard for testing */}
+          {user && user.role === 'owner' ? (
+            <TouchableOpacity
+              onPress={() => setShowOwnerDashboard((s) => !s)}
+              style={{ marginRight: 12 }}
+              accessibilityLabel="Open owner dashboard"
+            >
+              <Ionicons name="settings" size={22} color={showOwnerDashboard ? '#6C5CE7' : '#111'} />
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity onPress={onLogout}>
+            <Ionicons name="log-out-outline" size={22} color="#111" />
+          </TouchableOpacity>
+        </View>
+      </View>
 
       <View style={[styles.container, !isMobile ? styles.row : {}]}>
         {/* If owner requested the Owner dashboard (or the tab state is 'tenants'), render it inline */}
@@ -508,9 +583,16 @@ export default function TenantScreen({ user, onLogout }: Props) {
                         icon="card"
                       />
                       <StatCard
-                        title="Maintenance"
-                        value={`${maintenance.filter((m: any) => m.status === 'open').length} open`}
-                        icon="tools"
+                        title="Bills"
+                        value={`${
+                          (maintenance || []).filter((m: any) => m._type === 'bill').length
+                        } bills`}
+                        icon="card"
+                        onPress={() => {
+                          // show only bills when user clicks the Bills stat card
+                          setMaintenanceFilter('bills');
+                          setTab('maintenance');
+                        }}
                       />
                       <StatCard
                         title="Agreement"
@@ -518,6 +600,12 @@ export default function TenantScreen({ user, onLogout }: Props) {
                         icon="document-text"
                       />
                       <StatCard title="Notices" value={`${noticesCount}`} icon="notifications" />
+                      <StatCard
+                        title="Complaints"
+                        value={`${complaints.length || 0}`}
+                        icon="alert-circle"
+                        onPress={() => setTab('complaints')}
+                      />
                     </View>
 
                     <View style={styles.section}>
@@ -538,6 +626,40 @@ export default function TenantScreen({ user, onLogout }: Props) {
                           <Text style={styles.actionText}>Contact Owner</Text>
                         </TouchableOpacity>
                       </View>
+                    </View>
+                    {/* Bills raised by owner shown on dashboard for tenant */}
+                    <View style={styles.section}>
+                      <Text style={styles.sectionTitle}>Bills Raised by Owner</Text>
+                      {((maintenance || []).filter((m: any) => m._type === 'bill') || []).length ===
+                      0 ? (
+                        <Text style={styles.muted}>No bills at the moment.</Text>
+                      ) : (
+                        (maintenance || [])
+                          .filter((m: any) => m._type === 'bill')
+                          .map((b: any) => (
+                            <View
+                              key={b.id || String(b.createdAt) + (b.title || '')}
+                              style={styles.listItem}
+                            >
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.listTitle}>{b.title || 'Bill'}</Text>
+                                {b.description ? (
+                                  <Text style={styles.listSub}>{b.description}</Text>
+                                ) : null}
+                              </View>
+                              <View style={{ alignItems: 'flex-end' }}>
+                                <Text style={{ fontWeight: '700' }}>
+                                  ₹{b.cost || b.amount || '—'}
+                                </Text>
+                                <Text
+                                  style={{ color: b.status === 'open' ? '#ff6b6b' : '#10b981' }}
+                                >
+                                  {b.status}
+                                </Text>
+                              </View>
+                            </View>
+                          ))
+                      )}
                     </View>
                   </>
                 )}
@@ -601,6 +723,46 @@ export default function TenantScreen({ user, onLogout }: Props) {
                       onChangeText={(t) => setProfile((p: any) => ({ ...p, phone: t }))}
                       placeholder="Phone"
                       keyboardType="phone-pad"
+                    />
+
+                    <Text
+                      style={{ marginTop: 6, marginBottom: 4, color: '#374151', fontWeight: '700' }}
+                    >
+                      Email address
+                    </Text>
+                    <TextInput
+                      style={styles.input}
+                      value={profile.email}
+                      onChangeText={(t) => setProfile((p: any) => ({ ...p, email: t }))}
+                      placeholder="Email"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+
+                    <Text
+                      style={{ marginTop: 6, marginBottom: 4, color: '#374151', fontWeight: '700' }}
+                    >
+                      Emergency contact number
+                    </Text>
+                    <TextInput
+                      style={styles.input}
+                      value={profile.emergency_contact}
+                      onChangeText={(t) => setProfile((p: any) => ({ ...p, emergency_contact: t }))}
+                      placeholder="Emergency contact"
+                      keyboardType="phone-pad"
+                    />
+
+                    <Text
+                      style={{ marginTop: 6, marginBottom: 4, color: '#374151', fontWeight: '700' }}
+                    >
+                      Permanent address
+                    </Text>
+                    <TextInput
+                      style={[styles.input, { height: 80 }]}
+                      value={profile.address}
+                      onChangeText={(t) => setProfile((p: any) => ({ ...p, address: t }))}
+                      placeholder="Permanent address"
+                      multiline
                     />
                     <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
                       <Button title="Save" onPress={saveProfile} />
@@ -695,19 +857,38 @@ export default function TenantScreen({ user, onLogout }: Props) {
                   <View style={styles.section}>
                     <Text style={styles.sectionTitle}>My Owner</Text>
                     {ownerProfile ? (
-                      <ProfileCard
-                        name={ownerProfile.name}
-                        phone={ownerProfile.phone}
-                        email={ownerProfile.email}
-                        address={ownerProfile.address}
-                        imageUri={ownerProfile.avatar || ownerProfile.image}
-                        onEdit={undefined}
-                        onCall={(p) => {
-                          try {
-                            Linking.openURL(`tel:${p}`);
-                          } catch (e) {}
-                        }}
-                      />
+                      <View style={styles.ownerCard}>
+                        {ownerProfile.avatar || ownerProfile.image ? (
+                          <Image
+                            source={{ uri: ownerProfile.avatar || ownerProfile.image }}
+                            style={styles.ownerImageLarge}
+                          />
+                        ) : (
+                          <View style={styles.ownerImagePlaceholder}>
+                            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 32 }}>
+                              {(ownerProfile.name || 'O').charAt(0).toUpperCase()}
+                            </Text>
+                          </View>
+                        )}
+
+                        <View style={{ marginTop: 12 }}>
+                          <Text style={styles.ownerLabel}>Full name</Text>
+                          <Text style={styles.ownerValue}>{ownerProfile.name || '—'}</Text>
+
+                          <Text style={[styles.ownerLabel, { marginTop: 10 }]}>Full address</Text>
+                          <Text style={styles.ownerValue}>{ownerProfile.address || '—'}</Text>
+
+                          <Text style={[styles.ownerLabel, { marginTop: 10 }]}>Email</Text>
+                          <Text style={styles.ownerValue}>{ownerProfile.email || '—'}</Text>
+
+                          <Text style={[styles.ownerLabel, { marginTop: 10 }]}>
+                            Emergency contact
+                          </Text>
+                          <Text style={styles.ownerValue}>
+                            {ownerProfile.emergency_contact || '—'}
+                          </Text>
+                        </View>
+                      </View>
                     ) : (
                       <Text style={styles.muted}>Owner information not available.</Text>
                     )}
@@ -754,13 +935,18 @@ export default function TenantScreen({ user, onLogout }: Props) {
                 {tab === 'maintenance' && (
                   <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Maintenance Requests</Text>
-                    <View style={{ marginBottom: 8 }}>
-                      <Button title="New Request" onPress={() => setShowMaintenanceModal(true)} />
-                    </View>
-                    {maintenance.length === 0 ? (
-                      <Text style={styles.muted}>No maintenance requests yet.</Text>
-                    ) : (
-                      maintenance.map((m: any) => (
+                    {/* New Request button removed per UI request */}
+                    {(() => {
+                      const displayed = (maintenance || []).filter((it: any) => {
+                        if (maintenanceFilter === 'all') return true;
+                        if (maintenanceFilter === 'bills') return it._type === 'bill';
+                        if (maintenanceFilter === 'complaints') return it._type !== 'bill';
+                        return true;
+                      });
+                      if (displayed.length === 0) {
+                        return <Text style={styles.muted}>No maintenance requests yet.</Text>;
+                      }
+                      return displayed.map((m: any) => (
                         <View key={m.id} style={styles.listItem}>
                           <View style={{ flex: 1 }}>
                             <Text style={styles.listTitle}>{m.title}</Text>
@@ -795,8 +981,8 @@ export default function TenantScreen({ user, onLogout }: Props) {
                             ) : null}
                           </View>
                         </View>
-                      ))
-                    )}
+                      ));
+                    })()}
                   </View>
                 )}
 
@@ -852,8 +1038,8 @@ export default function TenantScreen({ user, onLogout }: Props) {
                       }}
                     >
                       <Text style={styles.sectionTitle}>Helplines</Text>
-                      {/* Tenants can add helplines for their society */}
-                      {user && user.role === 'tenant' ? (
+                      {/* Only owners may add helplines; tenants see the list but cannot add */}
+                      {user && user.role === 'owner' ? (
                         <TouchableOpacity
                           style={styles.smallBtn}
                           onPress={() => {
@@ -965,146 +1151,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
               </View>
             </Modal>
 
-            {/* MOBILE: Sidebar drawer as modal */}
-            <Modal visible={showSidebar} animationType="slide" transparent>
-              <TouchableOpacity
-                style={styles.mobileDrawerBackdrop}
-                onPress={() => setShowSidebar(false)}
-                activeOpacity={1}
-              >
-                <View style={styles.mobileDrawer}>
-                  <View style={styles.sidebarHeader}>
-                    <Text style={styles.sidebarTitle}>Tenant</Text>
-                    <Text style={styles.sidebarSub}>{user?.name || 'Tenant'}</Text>
-                  </View>
-                  <ScrollView>
-                    <TouchableOpacity
-                      style={[styles.mobileDrawerItem, tab === 'home' && styles.sidebarMenuActive]}
-                      onPress={() => {
-                        setTab('home');
-                        setShowSidebar(false);
-                      }}
-                    >
-                      <Ionicons name="speedometer" size={18} color="#fff" />
-                      <Text style={styles.mobileDrawerText}>Home</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.mobileDrawerItem,
-                        tab === 'profile' && styles.sidebarMenuActive,
-                      ]}
-                      onPress={() => {
-                        setTab('profile');
-                        setShowSidebar(false);
-                      }}
-                    >
-                      <Ionicons name="person" size={18} color="#fff" />
-                      <Text style={styles.mobileDrawerText}>Profile</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.mobileDrawerItem,
-                        tab === 'documents' && styles.sidebarMenuActive,
-                      ]}
-                      onPress={() => {
-                        setTab('documents');
-                        setShowSidebar(false);
-                      }}
-                    >
-                      <Ionicons name="folder" size={18} color="#fff" />
-                      <Text style={styles.mobileDrawerText}>Documents</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.mobileDrawerItem, tab === 'rent' && styles.sidebarMenuActive]}
-                      onPress={() => {
-                        setTab('rent');
-                        setShowSidebar(false);
-                      }}
-                    >
-                      <Ionicons name="card" size={18} color="#fff" />
-                      <Text style={styles.mobileDrawerText}>Rent</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.mobileDrawerItem,
-                        tab === 'maintenance' && styles.sidebarMenuActive,
-                      ]}
-                      onPress={() => {
-                        setTab('maintenance');
-                        setShowSidebar(false);
-                      }}
-                    >
-                      <Ionicons name="construct" size={18} color="#fff" />
-                      <Text style={styles.mobileDrawerText}>Maintenance</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.mobileDrawerItem,
-                        tab === 'complaints' && styles.sidebarMenuActive,
-                      ]}
-                      onPress={() => {
-                        setTab('complaints');
-                        setShowSidebar(false);
-                      }}
-                    >
-                      <Ionicons name="alert-circle" size={18} color="#fff" />
-                      <Text style={styles.mobileDrawerText}>Complaints</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.mobileDrawerItem,
-                        tab === 'notices' && styles.sidebarMenuActive,
-                      ]}
-                      onPress={() => {
-                        setTab('notices');
-                        setShowSidebar(false);
-                      }}
-                    >
-                      <Ionicons name="notifications" size={18} color="#fff" />
-                      <Text style={styles.mobileDrawerText}>Notices</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.mobileDrawerItem,
-                        tab === 'agreement' && styles.sidebarMenuActive,
-                      ]}
-                      onPress={() => {
-                        setTab('agreement');
-                        setShowSidebar(false);
-                      }}
-                    >
-                      <Ionicons name="document-text" size={18} color="#fff" />
-                      <Text style={styles.mobileDrawerText}>Agreement</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.mobileDrawerItem,
-                        tab === 'support' && styles.sidebarMenuActive,
-                      ]}
-                      onPress={() => {
-                        setTab('support');
-                        setShowSidebar(false);
-                      }}
-                    >
-                      <Ionicons name="chatbubbles" size={18} color="#fff" />
-                      <Text style={styles.mobileDrawerText}>Support</Text>
-                    </TouchableOpacity>
-                  </ScrollView>
-                  <View style={styles.sidebarFooter}>
-                    <TouchableOpacity
-                      onPress={() => {
-                        setShowSidebar(false);
-                        onLogout();
-                      }}
-                      style={styles.logoutRow}
-                    >
-                      <Ionicons name="log-out" size={18} color="#ffdbdb" />
-                      <Text style={styles.logoutText}>Logout</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            </Modal>
+            {/* Sidebar permanently removed for tenant screens */}
 
             {/* Maintenance modal */}
             <Modal visible={showMaintenanceModal} animationType="slide" transparent>
@@ -1230,15 +1277,54 @@ export default function TenantScreen({ user, onLogout }: Props) {
                     multiline
                   />
                   <View
-                    style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}
+                    style={{
+                      flexDirection: 'row',
+                      justifyContent: 'flex-end',
+                      alignItems: 'center',
+                      marginTop: 8,
+                    }}
                   >
-                    <Button
-                      title="Attach Image"
+                    {/* Upload / change image: show upload icon (changes to done icon when image present) */}
+                    <TouchableOpacity
+                      style={{ padding: 8, marginRight: 10 }}
                       onPress={() =>
                         pickFile((uri) => setComplaintForm((s) => ({ ...s, image: uri })))
                       }
-                    />
-                    <Button title="Submit" onPress={submitComplaint} />
+                    >
+                      {complaintForm.image ? (
+                        <Ionicons name="cloud-done" size={22} color="#10b981" />
+                      ) : (
+                        <Ionicons name="cloud-upload-outline" size={22} color="#2563eb" />
+                      )}
+                    </TouchableOpacity>
+
+                    {/* Preview (eye) if an image is attached */}
+                    {complaintForm.image ? (
+                      <TouchableOpacity
+                        style={{ padding: 8, marginRight: 12 }}
+                        onPress={() => {
+                          setPreviewImageUrl(complaintForm.image || null);
+                          setShowPreviewModal(true);
+                        }}
+                      >
+                        <Ionicons name="eye-outline" size={22} color="#2563eb" />
+                      </TouchableOpacity>
+                    ) : null}
+
+                    {/* Send icon replaces Submit button */}
+                    <TouchableOpacity
+                      onPress={submitComplaint}
+                      style={{
+                        backgroundColor: palette.primary,
+                        paddingVertical: 10,
+                        paddingHorizontal: 14,
+                        borderRadius: 8,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Ionicons name="send" size={18} color="#fff" />
+                    </TouchableOpacity>
                   </View>
                   <View style={{ marginTop: 8 }}>
                     <Button title="Cancel" onPress={() => setShowComplaintModal(false)} />
@@ -1520,6 +1606,18 @@ const styles: any = StyleSheet.create({
     paddingHorizontal: 4,
   },
   link: { color: palette.primary, fontWeight: '700' },
+  ownerCard: { backgroundColor: '#fff', padding: 16, borderRadius: 12, alignItems: 'center' },
+  ownerImageLarge: { width: 120, height: 120, borderRadius: 12, resizeMode: 'cover' },
+  ownerImagePlaceholder: {
+    width: 120,
+    height: 120,
+    borderRadius: 12,
+    backgroundColor: palette.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ownerLabel: { color: '#6b7280', fontSize: 12, fontWeight: '700' },
+  ownerValue: { fontSize: 16, fontWeight: '700', color: '#111', marginTop: 4 },
   // mobile drawer styles
   mobileDrawerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
   mobileDrawer: { width: '78%', height: '100%', backgroundColor: palette.primary, paddingTop: 36 },
@@ -1547,6 +1645,14 @@ const styles: any = StyleSheet.create({
   permAddBtn: {
     backgroundColor: '#1abc9c',
     paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  smallBtn: {
+    backgroundColor: palette.primary,
+    paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
     alignItems: 'center',
