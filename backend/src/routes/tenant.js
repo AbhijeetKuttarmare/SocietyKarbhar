@@ -190,13 +190,11 @@ router.post('/upload_form', upload.single('file'), async (req, res) => {
     return res.json({ url: `data:${mime};base64,${base64}` });
   } catch (e) {
     console.error('tenant upload_form failed', e && e.message, e && e.stack);
-    return res
-      .status(500)
-      .json({
-        error: 'upload failed',
-        detail: e && e.message,
-        stack: process.env.NODE_ENV !== 'production' ? e && e.stack : undefined,
-      });
+    return res.status(500).json({
+      error: 'upload failed',
+      detail: e && e.message,
+      stack: process.env.NODE_ENV !== 'production' ? e && e.stack : undefined,
+    });
   }
 });
 
@@ -365,7 +363,15 @@ router.put('/user', async (req, res) => {
     const u = await models.User.findByPk(req.user.id);
     if (!u) return res.status(404).json({ error: 'not found' });
     // allow list of safe fields only
-    const allowed = ['name', 'phone', 'email', 'address', 'avatar', 'mobile_number'];
+    const allowed = [
+      'name',
+      'phone',
+      'email',
+      'address',
+      'avatar',
+      'mobile_number',
+      'emergency_contact',
+    ];
     const updates = {};
     for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
     await u.update(updates);
@@ -585,3 +591,135 @@ router.get('/owner', async (req, res) => {
 });
 
 module.exports = router;
+
+// Backwards-compatible alias routes under /api/tenant/* so older clients that post to
+// /api/tenant/complaints or /api/tenant/maintenance continue to work when the router
+// is mounted at /api (instead of /api/tenant).
+
+// Alias: POST /tenant/complaints -> same as POST /complaints
+router.post('/tenant/complaints', async (req, res) => {
+  try {
+    const { title, description, cost } = req.body;
+    if (!title) return res.status(400).json({ error: 'title required' });
+    const c = await Complaint.create({
+      title,
+      description,
+      status: 'open',
+      cost: cost || 0,
+      societyId: req.user.societyId,
+      raised_by: req.user.id,
+    });
+    res.json({ complaint: c });
+  } catch (e) {
+    console.error('tenant create complaint (alias) failed', e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Alias: GET /tenant/complaints -> same as GET /complaints
+router.get('/tenant/complaints', async (req, res) => {
+  try {
+    const items = await Complaint.findAll({
+      where: { societyId: req.user.societyId, raised_by: req.user.id },
+      order: [['createdAt', 'DESC']],
+    });
+    res.json({ complaints: items });
+  } catch (e) {
+    console.error('tenant complaints list (alias) failed', e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Alias: POST /tenant/maintenance -> same as POST /maintenance
+router.post('/tenant/maintenance', async (req, res) => {
+  try {
+    const { title, description, cost } = req.body;
+    if (!title) return res.status(400).json({ error: 'title required' });
+    const c = await Complaint.create({
+      title,
+      description,
+      status: 'open',
+      cost: cost || 0,
+      societyId: req.user.societyId,
+      raised_by: req.user.id,
+    });
+    res.json({ maintenance: c });
+  } catch (e) {
+    console.error('tenant create maintenance (alias) failed', e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Alias: GET /tenant/maintenance -> same as GET /maintenance
+router.get('/tenant/maintenance', async (req, res) => {
+  try {
+    const complaints = await Complaint.findAll({
+      where: { societyId: req.user.societyId, raised_by: req.user.id },
+      order: [['createdAt', 'DESC']],
+    });
+    const bills = await Bill.findAll({
+      where: { societyId: req.user.societyId, assigned_to: req.user.id },
+      order: [['createdAt', 'DESC']],
+    });
+    const combined = [
+      ...bills.map((b) => ({ ...(b.get ? b.get({ plain: true }) : b), _type: 'bill' })),
+      ...complaints.map((c) => ({ ...(c.get ? c.get({ plain: true }) : c), _type: 'complaint' })),
+    ];
+    combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    res.json({ maintenance: combined });
+  } catch (e) {
+    console.error('tenant maintenance list (alias) failed', e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Alias uploads: POST /tenant/upload and /tenant/upload_form
+router.post('/tenant/upload', async (req, res) => {
+  const { dataUrl, filename } = req.body;
+  if (!dataUrl) return res.status(400).json({ error: 'dataUrl required' });
+  try {
+    if (
+      process.env.CLOUDINARY_CLOUD_NAME &&
+      process.env.CLOUDINARY_API_KEY &&
+      process.env.CLOUDINARY_API_SECRET
+    ) {
+      const opts = { folder: 'society_karbhar' };
+      if (process.env.CLOUDINARY_UPLOAD_PRESET)
+        opts.upload_preset = process.env.CLOUDINARY_UPLOAD_PRESET;
+      if (filename) opts.public_id = filename.replace(/\.[^/.]+$/, '');
+      const result = await cloudinary.uploader.upload(dataUrl, opts);
+      return res.json({ url: result.secure_url });
+    }
+    return res.json({ url: dataUrl });
+  } catch (e) {
+    console.error('tenant upload (alias) failed', e && e.message);
+    return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+  }
+});
+
+router.post('/tenant/upload_form', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'file required' });
+    if (
+      process.env.CLOUDINARY_CLOUD_NAME &&
+      process.env.CLOUDINARY_API_KEY &&
+      process.env.CLOUDINARY_API_SECRET
+    ) {
+      const opts = { folder: 'society_karbhar' };
+      if (process.env.CLOUDINARY_UPLOAD_PRESET)
+        opts.upload_preset = process.env.CLOUDINARY_UPLOAD_PRESET;
+      const dataUrl = `data:${
+        file.mimetype || 'application/octet-stream'
+      };base64,${file.buffer.toString('base64')}`;
+      const result = await cloudinary.uploader.upload(dataUrl, opts);
+      return res.json({ url: result.secure_url });
+    }
+    const base64 = file.buffer.toString('base64');
+    const mime = file.mimetype || 'application/octet-stream';
+    return res.json({ url: `data:${mime};base64,${base64}` });
+  } catch (e) {
+    console.error('tenant upload_form (alias) failed', e && e.message);
+    return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+  }
+});

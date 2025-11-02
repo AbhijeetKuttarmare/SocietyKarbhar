@@ -4,8 +4,192 @@ const { User, Flat, Complaint, Document, Agreement, Bill } = require('../models'
 const { Op } = require('sequelize');
 const { authenticate, authorize } = require('../middlewares/auth');
 const cloudinary = require('cloudinary').v2;
+let puppeteer = null;
+try {
+  // require puppeteer optionally; if not installed the server will still run and
+  // agreement generation will fall back to uploading HTML data URLs.
+  // Install with `npm install puppeteer` in backend to enable PDF generation.
+  // eslint-disable-next-line global-require
+  puppeteer = require('puppeteer');
+} catch (e) {
+  console.warn('[owner/routes] puppeteer not available, PDF generation disabled');
+}
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
+
+// helper: generate agreement HTML/PDF, upload to cloudinary (if configured) and
+// update agreement.file_url + create Document records for tenant & owner.
+async function generateAndSaveAgreement({
+  agreement,
+  tenant,
+  ownerUser,
+  flat,
+  move_in,
+  rent,
+  deposit,
+  witness1,
+  witness2,
+  societyId,
+}) {
+  const createdDocs = [];
+  if (!agreement) return { agreement: null, documents: createdDocs };
+  try {
+    const generateRentAgreement = require('../templates/RentAgreement');
+
+    function escapeHtml(str) {
+      if (!str && str !== 0) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    const moveInDateFormatted = move_in || new Date().toLocaleDateString();
+    const agreementText = generateRentAgreement({
+      owner: { name: ownerUser.name, address: ownerUser.address, contact: ownerUser.phone },
+      tenant: { name: tenant.name, address: tenant.address, contact: tenant.phone },
+      moveInDate: moveInDateFormatted,
+      rentAmount: rent || '',
+      rentInWords: '',
+      securityDeposit: deposit || '',
+      tenancyPeriod: '',
+      witness1: witness1 || '',
+      witness2: witness2 || '',
+    });
+
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Rent Agreement</title><style>body{font-family: Arial, Helvetica, sans-serif; padding:20px;} pre{white-space:pre-wrap; font-family:inherit;}</style></head><body><pre>${escapeHtml(
+      agreementText
+    )}</pre></body></html>`;
+
+    let uploadedUrl = null;
+    console.log('[owner/generate] starting agreement generation for tenant', tenant && tenant.id);
+
+    if (puppeteer) {
+      console.log('[owner/generate] puppeteer available — attempting PDF render');
+      try {
+        const browser = await puppeteer.launch({
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+        const page = await browser.newPage();
+        await page.setContent(html, { waitUntil: 'networkidle0' });
+        const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+        await browser.close();
+
+        const pdfDataUrl = `data:application/pdf;base64,${pdfBuffer.toString('base64')}`;
+
+        if (
+          process.env.CLOUDINARY_CLOUD_NAME &&
+          process.env.CLOUDINARY_API_KEY &&
+          process.env.CLOUDINARY_API_SECRET
+        ) {
+          try {
+            const opts = { folder: 'society_karbhar/agreements', resource_type: 'raw' };
+            const result = await cloudinary.uploader.upload(pdfDataUrl, opts);
+            uploadedUrl = result && result.secure_url ? result.secure_url : pdfDataUrl;
+            console.log('[owner/generate] uploaded PDF to Cloudinary', uploadedUrl);
+          } catch (e) {
+            console.warn('[owner/generate] cloudinary upload (pdf) failed', e && e.message);
+            uploadedUrl = pdfDataUrl;
+          }
+        } else {
+          uploadedUrl = pdfDataUrl;
+          console.log('[owner/generate] pdf generated (no cloudinary configured)');
+        }
+      } catch (e) {
+        console.warn(
+          '[owner/generate] pdf generation failed, falling back to HTML upload',
+          e && e.message
+        );
+      }
+    } else {
+      console.log('[owner/generate] puppeteer not available — skipping PDF render');
+    }
+
+    if (!uploadedUrl) {
+      try {
+        const dataUrl = `data:text/html;base64,${Buffer.from(html).toString('base64')}`;
+        if (
+          process.env.CLOUDINARY_CLOUD_NAME &&
+          process.env.CLOUDINARY_API_KEY &&
+          process.env.CLOUDINARY_API_SECRET
+        ) {
+          try {
+            const opts = { folder: 'society_karbhar/agreements' };
+            const result = await cloudinary.uploader.upload(dataUrl, opts);
+            uploadedUrl = result && result.secure_url ? result.secure_url : dataUrl;
+            console.log('[owner/generate] uploaded HTML fallback to Cloudinary', uploadedUrl);
+          } catch (e2) {
+            console.warn(
+              '[owner/generate] cloudinary upload (html fallback) failed',
+              e2 && e2.message
+            );
+            uploadedUrl = dataUrl;
+          }
+        } else {
+          uploadedUrl = dataUrl;
+          console.log('[owner/generate] HTML fallback prepared (no cloudinary)');
+        }
+      } catch (e2) {
+        console.warn('[owner/generate] fallback upload failed', e2 && e2.message);
+      }
+    }
+
+    // Persist file_url to agreement and start_date
+    try {
+      await agreement.update({ file_url: uploadedUrl, start_date: move_in || null });
+    } catch (e) {
+      console.warn(
+        '[owner/generate] failed to update agreement with file_url',
+        e && (e.stack || e.message)
+      );
+    }
+
+    // create document records for tenant and owner
+    try {
+      const fileType =
+        uploadedUrl && uploadedUrl.startsWith('data:application/pdf')
+          ? 'application/pdf'
+          : 'text/html';
+      try {
+        const docTenant = await Document.create({
+          title: 'Rent Agreement',
+          file_url: uploadedUrl,
+          file_type: fileType,
+          uploaded_by: tenant.id,
+          societyId,
+        });
+        createdDocs.push(docTenant);
+      } catch (e) {
+        console.warn('[owner/generate] failed to create tenant agreement document', e && e.message);
+      }
+      try {
+        const docOwner = await Document.create({
+          title: 'Rent Agreement (owner copy)',
+          file_url: uploadedUrl,
+          file_type: fileType,
+          uploaded_by: ownerUser.id,
+          societyId,
+        });
+        createdDocs.push(docOwner);
+      } catch (e) {
+        console.warn('[owner/generate] failed to create owner agreement document', e && e.message);
+      }
+      console.log('[owner/generate] created agreement documents for tenant and owner');
+    } catch (e) {
+      console.warn(
+        '[owner/generate] failed to create agreement document records',
+        e && (e.stack || e.message)
+      );
+    }
+
+    return { agreement, documents: createdDocs };
+  } catch (e) {
+    console.warn('[owner/generate] agreement generation failed', e && (e.stack || e.message));
+    return { agreement, documents: createdDocs };
+  }
+}
 
 // configure cloudinary if env present
 if (process.env.CLOUDINARY_URL) {
@@ -82,8 +266,23 @@ router.post('/tenants', async (req, res) => {
       move_in,
       move_out,
       flatId,
+      witness1,
+      witness2,
     } = req.body;
     const phone = String(rawPhone || '').replace(/\D/g, '');
+    // debug: log incoming create tenant request (key fields only)
+    try {
+      console.log('[owner/create] incoming req.body keys=', Object.keys(req.body || {}));
+      console.log('[owner/create] fields:', {
+        name: name || null,
+        phone: phone || null,
+        flatId: flatId || null,
+        aadhaar: req.body.aadhaar_url || req.body.aadhaar || null,
+        pan: req.body.pan_url || req.body.pan || null,
+      });
+    } catch (e) {
+      console.warn('[owner/create] failed to log request body', e && e.message);
+    }
     if (!phone) return res.status(400).json({ error: 'phone required' });
     const existing = await User.findOne({ where: { phone } });
     if (existing) return res.status(400).json({ error: 'user exists' });
@@ -99,6 +298,12 @@ router.post('/tenants', async (req, res) => {
       move_in: move_in || null,
       move_out: move_out || null,
     });
+
+    console.log('[owner/create] created user id=', user && user.id, 'phone=', user && user.phone);
+
+    // capture created agreement & documents so we can return them in the response
+    let createdAgreement = null;
+    const createdDocuments = [];
 
     // If owner provided identity URLs (aadhaar/pan) include them as documents
     try {
@@ -138,36 +343,61 @@ router.post('/tenants', async (req, res) => {
     }
 
     // If flatId provided, validate the flat (must belong to this society) and
-    // ensure agreement links tenant -> flat -> owner. Prefer the flat.ownerId if set,
-    // otherwise assign the current owner (req.user.id) to the flat and use that.
+    // ensure the flat is assigned to an owner. Agreement creation/generation is
+    // deferred to the dedicated endpoint POST /tenants/:id/generate-agreement
+    // which the client should call after creating/updating the tenant.
     if (flatId) {
       try {
         const f = await Flat.findByPk(flatId);
         if (!f || f.societyId !== req.user.societyId) {
-          console.warn('[owner/create] flat not found or not in owner society', flatId);
+          console.warn(
+            '[owner/create] flat not found or not in owner society',
+            flatId,
+            'found=',
+            !!f,
+            'flat.societyId=',
+            f && f.societyId,
+            'req.user.societyId=',
+            req.user.societyId
+          );
         } else {
+          try {
+            console.log('[owner/create] flat found (deferred agreement creation)', {
+              id: f.id,
+              flat_no: f.flat_no,
+              ownerId: f.ownerId,
+              societyId: f.societyId,
+            });
+          } catch (e) {}
           // ensure the flat has an ownerId; if missing, set to current owner
-          let finalOwnerId = f.ownerId || req.user.id;
           if (!f.ownerId) {
             try {
               await f.update({ ownerId: req.user.id });
-              finalOwnerId = req.user.id;
             } catch (e) {
               console.warn('[owner/create] failed to assign owner to flat', e && e.message);
             }
           }
-          try {
-            await Agreement.create({ flatId, ownerId: finalOwnerId, tenantId: user.id });
-          } catch (err) {
-            console.warn('[owner/create] failed to create agreement', err && err.message);
-          }
+          console.log(
+            '[owner/create] agreement creation deferred to /tenants/:id/generate-agreement'
+          );
         }
       } catch (err) {
         console.warn('[owner/create] validation for flat failed', err && err.message);
       }
     }
 
-    res.json({ user });
+    // return created agreement and documents (if any) so frontend can show them immediately
+    try {
+      console.log(
+        '[owner/create] responding user=',
+        user && user.id,
+        'agreement=',
+        createdAgreement && createdAgreement.id,
+        'documentsCount=',
+        (createdDocuments || []).length
+      );
+    } catch (e) {}
+    return res.json({ user, agreement: createdAgreement, documents: createdDocuments });
   } catch (e) {
     console.error('owner create tenant failed', e);
     res.status(500).json({ error: 'failed', detail: e && e.message });
@@ -199,8 +429,13 @@ router.put('/tenants/:id', async (req, res) => {
     for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
     await tenant.update(updates);
 
-    // If a flatId is provided in the update body, validate and create an Agreement linking this tenant to that flat
+    // If a flatId is provided in the update body, validate and ensure the flat
+    // belongs to this society and has an owner assigned. Agreement creation is
+    // deferred — the client should call POST /tenants/:id/generate-agreement to
+    // create + generate the agreement after the tenant update.
     const { flatId } = req.body;
+    // hold any generated agreement/documents during update so we can return them
+    let updatedAgreementResult = null;
     if (flatId) {
       try {
         const f = await Flat.findByPk(flatId);
@@ -208,20 +443,16 @@ router.put('/tenants/:id', async (req, res) => {
           console.warn('[owner/update] flat not found or not in owner society', flatId);
         } else {
           // ensure flat has an owner; prefer existing ownerId otherwise assign to current owner
-          let finalOwnerId = f.ownerId || req.user.id;
           if (!f.ownerId) {
             try {
               await f.update({ ownerId: req.user.id });
-              finalOwnerId = req.user.id;
             } catch (e) {
               console.warn('[owner/update] failed to assign owner to flat', e && e.message);
             }
           }
-          try {
-            await Agreement.create({ flatId, ownerId: finalOwnerId, tenantId: tenant.id });
-          } catch (err) {
-            console.warn('[owner/update] failed to create agreement', err && err.message);
-          }
+          console.log(
+            '[owner/update] flat validated; agreement creation deferred to /tenants/:id/generate-agreement'
+          );
         }
       } catch (err) {
         console.warn('[owner/update] validation for flat failed', err && err.message);
@@ -257,6 +488,17 @@ router.put('/tenants/:id', async (req, res) => {
       console.warn('[owner/update] identity docs processing failed', e && e.message);
     }
 
+    // include any agreement/documents produced during update
+    if (
+      updatedAgreementResult &&
+      (updatedAgreementResult.documents || updatedAgreementResult.agreement)
+    ) {
+      return res.json({
+        user: tenant,
+        agreement: updatedAgreementResult.agreement || null,
+        documents: updatedAgreementResult.documents || [],
+      });
+    }
     res.json({ user: tenant });
   } catch (e) {
     console.error('owner update tenant failed', e);
@@ -348,6 +590,121 @@ router.get('/tenants/:id/history', async (req, res) => {
   } catch (e) {
     console.error('owner tenant history failed', e);
     res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Generate rent agreement PDF/html, upload and create Document records for an existing tenant
+router.post('/tenants/:id/generate-agreement', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const tenant = await User.findByPk(id);
+    if (!tenant || tenant.societyId !== req.user.societyId)
+      return res.status(404).json({ error: 'not found' });
+
+    const { flatId, move_in, rent, deposit, witness1, witness2 } = req.body;
+    if (!flatId) return res.status(400).json({ error: 'flatId required to create agreement' });
+
+    const flat = await Flat.findByPk(flatId);
+    if (!flat || flat.societyId !== req.user.societyId)
+      return res.status(400).json({ error: 'invalid flatId' });
+
+    // ensure flat has an ownerId; if missing, assign to current owner
+    let finalOwnerId = flat.ownerId || req.user.id;
+    if (!flat.ownerId) {
+      try {
+        await flat.update({ ownerId: req.user.id });
+        finalOwnerId = req.user.id;
+      } catch (e) {
+        console.warn('[owner/generate-endpoint] failed to assign owner to flat', e && e.message);
+      }
+    }
+
+    // create Agreement record (gracefully handle missing witness columns)
+    let agreement = null;
+    try {
+      agreement = await Agreement.create({
+        flatId,
+        ownerId: finalOwnerId,
+        tenantId: tenant.id,
+        witness1: witness1 || null,
+        witness2: witness2 || null,
+      });
+      console.log(
+        '[owner/generate-endpoint] Agreement.create success id=',
+        agreement && agreement.id
+      );
+    } catch (createErr) {
+      const msg = (createErr && createErr.message) || '';
+      console.error(
+        '[owner/generate-endpoint] Agreement.create error',
+        createErr && (createErr.stack || createErr.message)
+      );
+      if (/witness1|witness2|column .* does not exist|unknown column/i.test(msg)) {
+        console.warn(
+          '[owner/generate-endpoint] Agreement.create failed due to missing witness columns; retrying without witness fields'
+        );
+        try {
+          agreement = await Agreement.create({
+            flatId,
+            ownerId: finalOwnerId,
+            tenantId: tenant.id,
+          });
+          console.log(
+            '[owner/generate-endpoint] Agreement.create success (no witness fields) id=',
+            agreement && agreement.id
+          );
+        } catch (e2) {
+          console.error(
+            '[owner/generate-endpoint] failed to create agreement without witness fields',
+            e2 && (e2.stack || e2.message)
+          );
+          return res
+            .status(500)
+            .json({ error: 'failed to create agreement', detail: e2 && e2.message });
+        }
+      } else {
+        return res
+          .status(500)
+          .json({ error: 'failed to create agreement', detail: createErr && createErr.message });
+      }
+    }
+
+    // generate PDF/html, upload and create document records
+    try {
+      console.log(
+        '[owner/generate-endpoint] calling generateAndSaveAgreement for agreement id=',
+        agreement && agreement.id
+      );
+      const result = await generateAndSaveAgreement({
+        agreement,
+        tenant,
+        ownerUser: req.user,
+        flat,
+        move_in,
+        rent,
+        deposit,
+        witness1,
+        witness2,
+        societyId: req.user.societyId,
+      });
+      console.log('[owner/generate-endpoint] generateAndSaveAgreement result:', {
+        agreementId: result && result.agreement && result.agreement.id,
+        documentsCount: result && result.documents && result.documents.length,
+      });
+      return res.json({
+        agreement: result && result.agreement,
+        documents: result && result.documents,
+      });
+    } catch (e) {
+      console.error(
+        '[owner/generate-endpoint] generateAndSaveAgreement failed',
+        e && (e.stack || e.message)
+      );
+      return res.status(500).json({ error: 'generation_failed', detail: e && e.message });
+    }
+  } catch (e) {
+    console.error('owner generate-agreement endpoint failed', e && e.message);
+    return res.status(500).json({ error: 'failed', detail: e && e.message });
   }
 });
 

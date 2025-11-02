@@ -49,14 +49,26 @@ router.put('/', authenticate, async (req, res) => {
     const userId = req.user && req.user.id;
     if (!userId) return res.status(401).json({ error: 'not authenticated' });
 
-    const allowed = ['name', 'phone', 'avatar', 'address'];
+    // allow partial updates for common profile fields
+    const allowed = ['name', 'phone', 'avatar', 'address', 'email', 'emergency_contact'];
     const payload = {};
     for (const k of allowed) if (typeof req.body[k] !== 'undefined') payload[k] = req.body[k];
+
+    // accept mobile_number as an alias for phone from some clients
+    if (!payload.phone && typeof req.body.mobile_number !== 'undefined') {
+      payload.phone = req.body.mobile_number;
+    }
 
     const u = await models.User.findByPk(userId);
     if (!u) return res.status(404).json({ error: 'user not found' });
     await u.update(payload);
-    const out = u.get ? u.get({ plain: true }) : u;
+
+    // return an enriched user (same shape as GET /me) so clients get the up-to-date representation
+    const fresh = await models.User.findByPk(userId, {
+      include: [{ model: models.Society, as: 'adminSocieties', through: { attributes: [] } }],
+    });
+    const out =
+      fresh && fresh.get ? fresh.get({ plain: true }) : u.get ? u.get({ plain: true }) : u;
     return res.json({ user: out });
   } catch (err) {
     console.error('[user] update error', err && (err.stack || err));

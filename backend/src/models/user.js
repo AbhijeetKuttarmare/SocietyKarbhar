@@ -28,6 +28,7 @@ module.exports = (sequelize) => {
       password_hash: { type: DataTypes.STRING, allowNull: true },
       // tenant/owner profile fields
       address: { type: DataTypes.STRING, allowNull: true },
+      emergency_contact: { type: DataTypes.STRING, allowNull: true },
       avatar: { type: DataTypes.STRING, allowNull: true },
       gender: { type: DataTypes.ENUM('male', 'female', 'other'), allowNull: true },
       move_in: { type: DataTypes.DATE, allowNull: true },
