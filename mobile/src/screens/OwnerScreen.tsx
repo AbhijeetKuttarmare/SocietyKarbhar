@@ -21,6 +21,20 @@ import { Ionicons } from '@expo/vector-icons';
 import ProfileCard from '../components/ProfileCard';
 import * as FileSystem from 'expo-file-system';
 import api, { setAuthHeader, attachErrorHandler } from '../services/api';
+// WebView for in-app PDF rendering on native
+// attempt to require WebView optionally at runtime on native only.
+// We avoid a static require so the web bundler doesn't try to resolve the module.
+let WebView: any = null;
+try {
+  if (Platform && Platform.OS !== 'web') {
+    // use eval('require') to prevent bundlers from statically resolving the module
+    const _req: any = eval('require');
+    WebView = _req('react-native-webview')?.WebView || null;
+  }
+} catch (e) {
+  WebView = null;
+  console.warn('[OwnerScreen] react-native-webview not available; in-app PDF viewing disabled');
+}
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 
@@ -97,6 +111,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   // Tenant modal state
   const [showTenantModal, setShowTenantModal] = useState(false);
   const [editingTenant, setEditingTenant] = useState<any>(null);
+  const [showTenantConfirm, setShowTenantConfirm] = useState(false);
   const [editingPhoneError, setEditingPhoneError] = useState('');
   const [editingReadOnly, setEditingReadOnly] = useState(false);
   // Date picker state for move-in / move-out
@@ -249,6 +264,8 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   const [propertyDocs, setPropertyDocs] = useState<any[]>([]);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewTargetUrl, setPreviewTargetUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [uploadingPropertyDoc, setUploadingPropertyDoc] = useState(false);
   const [uploadingProof, setUploadingProof] = useState<Record<string, boolean>>({});
   const [deletingTenantField, setDeletingTenantField] = useState<string | null>(null);
@@ -343,9 +360,148 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   // helper to open preview: on web open in new tab for reliability, on native show inline modal
   function handlePreview(url?: string | null) {
     if (!url) return;
-    // Always show inline preview modal (do not open a new window/tab)
-    setPreviewImageUrl(url);
-    setShowPreviewModal(true);
+    // simple helpers to detect content type by URL / data URL
+    const isImage = (u: string) =>
+      /^(data:image\/|.*\.(png|jpg|jpeg|gif|bmp|webp)(\?.*)?$)/i.test(u);
+    const isPdf = (u: string) => /^(data:application\/pdf)|.*\.(pdf)(\?.*)?$/i.test(u);
+    const isHtmlData = (u: string) => /^data:text\/html/i.test(u);
+
+    async function openExternal(u: string) {
+      try {
+        // handle data:application/pdf on native by writing to file and opening it
+        if (isPdf(u) && u.startsWith('data:application/pdf') && Platform.OS !== 'web') {
+          try {
+            const base64 = u.replace(/^data:application\/pdf;base64,/, '');
+            const fname = `agreement_${Date.now()}.pdf`;
+            const fileUri = FileSystem.cacheDirectory + fname;
+            await FileSystem.writeAsStringAsync(fileUri, base64, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+            await Linking.openURL(fileUri);
+            return true;
+          } catch (e) {
+            console.warn('openExternal: write/open pdf failed', e);
+          }
+        }
+
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          try {
+            window.open(u, '_blank');
+            return true;
+          } catch (e) {
+            console.warn('openExternal window.open failed', e);
+          }
+        }
+
+        try {
+          await Linking.openURL(u);
+          return true;
+        } catch (e) {
+          console.warn('openExternal Linking.openURL failed', e);
+        }
+      } catch (e) {
+        console.warn('openExternal unexpected error', e);
+      }
+      return false;
+    }
+
+    (async () => {
+      try {
+        // If it's an image we can show inline in the modal
+        if (isImage(url)) {
+          setPreviewImageUrl(url);
+          setPreviewTargetUrl(null);
+          setShowPreviewModal(true);
+          return;
+        }
+
+        // Try to open externally for non-image content (PDF/HTML/raw)
+        const opened = await openExternal(url);
+        if (opened) return;
+
+        // If we couldn't open, show the modal with an "Open" button that retries
+        setPreviewImageUrl(null);
+        setPreviewTargetUrl(url);
+        setShowPreviewModal(true);
+      } catch (e) {
+        console.warn('handlePreview failed', e);
+      }
+    })();
+  }
+
+  // Download agreement PDF (web + native). Attempts to save the file and open it.
+  async function downloadAgreement(url?: string | null) {
+    if (!url) return;
+    const filename = `rent_agreement_${Date.now()}.pdf`;
+    try {
+      if (Platform.OS === 'web') {
+        // For web, fetch and trigger a download via blob
+        try {
+          const resp = await fetch(url);
+          const blob = await resp.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(blobUrl);
+          return;
+        } catch (e) {
+          console.warn('[downloadAgreement] web fetch/download failed, trying open', e);
+          try {
+            window.open(url, '_blank');
+            return;
+          } catch (ee) {
+            console.warn('[downloadAgreement] window.open failed', ee);
+          }
+        }
+      }
+
+      // Native (expo): handle data:application/pdf or remote urls
+      if (url.startsWith('data:application/pdf')) {
+        const base64 = url.split(',')[1];
+        const fileUri = FileSystem.documentDirectory + filename;
+        await FileSystem.writeAsStringAsync(fileUri, base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        try {
+          await Linking.openURL(fileUri);
+        } catch (e) {
+          console.warn('[downloadAgreement] open file failed', e);
+        }
+        Alert.alert('Downloaded', `Saved to ${fileUri}`);
+        return;
+      }
+
+      // remote http(s) url: download to documentDirectory
+      try {
+        const fileUri = FileSystem.documentDirectory + filename;
+        const dl = await FileSystem.downloadAsync(url, fileUri);
+        try {
+          await Linking.openURL(dl.uri);
+        } catch (e) {
+          console.warn('[downloadAgreement] open downloaded file failed', e);
+        }
+        Alert.alert('Downloaded', `Saved to ${dl.uri}`);
+        return;
+      } catch (e) {
+        console.warn('[downloadAgreement] downloadAsync failed', e);
+        // fallback: attempt to open URL externally
+        try {
+          await Linking.openURL(url);
+          return;
+        } catch (ee) {
+          console.warn('[downloadAgreement] fallback openURL failed', ee);
+        }
+      }
+    } catch (e) {
+      console.warn('downloadAgreement failed', e);
+      try {
+        Alert.alert('Download failed', String(e));
+      } catch (ee) {}
+    }
   }
 
   const stats = useMemo(
@@ -472,23 +628,33 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   function openAddTenant(t?: any) {
     // normalize incoming tenant shape from API if present
     if (t) {
-      setEditingTenant(clientShapeFromApi(t));
+      // if caller provided history (agreements/documents), attach it so we don't re-fetch
+      const client = clientShapeFromApi(t);
+      if (t.history) client.history = t.history;
+      else if (t.agreement || t.documents)
+        client.history = {
+          agreements: t.agreement ? [t.agreement] : [],
+          documents: t.documents || [],
+        };
+      setEditingTenant(client);
       setEditingPhoneError('');
       setEditingReadOnly((t && t.status) === 'inactive');
       // fetch tenant history (agreements + documents) for owner view
-      (async () => {
-        try {
-          const r = await api.get(`/api/owner/tenants/${t.id}/history`);
-          const hist = r.data || {};
-          setEditingTenant((s: any) => ({ ...s, history: hist }));
-        } catch (err) {
-          // ignore history errors (older tenants may not have history)
-          console.warn(
-            'failed to load tenant history',
-            err && ((err as any).response?.data || (err as any).message || err)
-          );
-        }
-      })();
+      if (!t.history && !t.agreement && !t.documents) {
+        (async () => {
+          try {
+            const r = await api.get(`/api/owner/tenants/${t.id}/history`);
+            const hist = r.data || {};
+            setEditingTenant((s: any) => ({ ...s, history: hist }));
+          } catch (err) {
+            // ignore history errors (older tenants may not have history)
+            console.warn(
+              'failed to load tenant history',
+              err && ((err as any).response?.data || (err as any).message || err)
+            );
+          }
+        })();
+      }
     } else {
       setEditingTenant({
         id: null,
@@ -527,6 +693,8 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       name: t.name,
       phone: t.phone,
       address: t.address,
+      witness1: t.witness1 || undefined,
+      witness2: t.witness2 || undefined,
       gender: t.gender ? String(t.gender).toLowerCase() : null,
       move_in: t.moveIn ? new Date(t.moveIn).toISOString() : null,
       // move_out intentionally omitted per new UX
@@ -589,22 +757,152 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
           const payload = mapTenantForApi(t);
           const r = await api.post('/api/owner/tenants', payload);
           const created = r.data && r.data.user;
-          if (created) setTenants((s) => [clientShapeFromApi(created), ...s]);
+          if (created) {
+            const client = clientShapeFromApi(created);
+            // attach any immediate history returned (older backend still returned agreement/docs)
+            const agreement = r.data && r.data.agreement;
+            const documents = r.data && r.data.documents;
+            client.history = {
+              agreements: agreement ? [agreement] : [],
+              documents: Array.isArray(documents) ? documents : [],
+            };
+            // add to list and set editing tenant so modal stays open
+            setTenants((s) => [client, ...s]);
+            setEditingTenant(client);
+            setEditingReadOnly((client && client.status) === 'inactive');
+
+            // If a flat is assigned, trigger server-side agreement generation
+            try {
+              const flatId = payload.flatId;
+              if (flatId) {
+                const genBody: any = {
+                  flatId,
+                  move_in: payload.move_in,
+                  rent: payload.rent,
+                  deposit: payload.deposit,
+                  witness1: payload.witness1,
+                  witness2: payload.witness2,
+                };
+                const g = await api.post(
+                  `/api/owner/tenants/${created.id}/generate-agreement`,
+                  genBody
+                );
+                const genAgreement = g.data && g.data.agreement;
+                const genDocuments = g.data && g.data.documents;
+                // attach generated agreement/docs to tenant history so icons show immediately
+                setEditingTenant((s: any) => ({
+                  ...(s || {}),
+                  history: {
+                    agreements: genAgreement
+                      ? [genAgreement]
+                      : (s && s.history && s.history.agreements) || [],
+                    documents: Array.isArray(genDocuments)
+                      ? genDocuments
+                      : (s && s.history && s.history.documents) || [],
+                  },
+                }));
+                // update list entry too
+                setTenants((list) =>
+                  list.map((it) =>
+                    it.id === client.id
+                      ? {
+                          ...it,
+                          history: {
+                            agreements: genAgreement
+                              ? [genAgreement]
+                              : (it.history && it.history.agreements) || [],
+                            documents: Array.isArray(genDocuments)
+                              ? genDocuments
+                              : (it.history && it.history.documents) || [],
+                          },
+                        }
+                      : it
+                  )
+                );
+              }
+            } catch (e: any) {
+              console.warn(
+                'generate-agreement (post-create) failed',
+                e && (e.response?.data || e.message)
+              );
+            }
+          }
         } else {
           const payload = mapTenantForApi(t);
           const r = await api.put(`/api/owner/tenants/${t.id}`, payload);
           const updated = r.data && r.data.user;
-          if (updated)
-            setTenants((s) =>
-              s.map((x) => (x.id === updated.id ? clientShapeFromApi(updated) : x))
-            );
+          if (updated) {
+            const clientUpdated = clientShapeFromApi(updated);
+            setTenants((s) => s.map((x) => (x.id === updated.id ? clientUpdated : x)));
+            // If flatId provided in update, trigger agreement generation
+            try {
+              const flatId = payload.flatId;
+              if (flatId) {
+                const genBody: any = {
+                  flatId,
+                  move_in: payload.move_in || updated.move_in,
+                  rent: payload.rent || updated.rent,
+                  deposit: payload.deposit || updated.deposit,
+                  witness1: t.witness1 || undefined,
+                  witness2: t.witness2 || undefined,
+                };
+                const g = await api.post(
+                  `/api/owner/tenants/${updated.id}/generate-agreement`,
+                  genBody
+                );
+                const genAgreement = g.data && g.data.agreement;
+                const genDocuments = g.data && g.data.documents;
+                // update tenant in list with new history
+                setTenants((list) =>
+                  list.map((it) =>
+                    it.id === updated.id
+                      ? {
+                          ...it,
+                          history: {
+                            agreements: genAgreement
+                              ? [genAgreement]
+                              : (it.history && it.history.agreements) || [],
+                            documents: Array.isArray(genDocuments)
+                              ? genDocuments
+                              : (it.history && it.history.documents) || [],
+                          },
+                        }
+                      : it
+                  )
+                );
+                // if modal is open for this tenant, attach history
+                setEditingTenant((s: any) =>
+                  s && s.id === updated.id
+                    ? {
+                        ...clientUpdated,
+                        history: {
+                          agreements: genAgreement
+                            ? [genAgreement]
+                            : (s.history && s.history.agreements) || [],
+                          documents: Array.isArray(genDocuments)
+                            ? genDocuments
+                            : (s.history && s.history.documents) || [],
+                        },
+                      }
+                    : s
+                );
+              }
+            } catch (e: any) {
+              console.warn(
+                'generate-agreement (post-update) failed',
+                e && (e.response?.data || e.message)
+              );
+            }
+          }
         }
         // clear any phone error on successful save
         setEditingPhoneError('');
       } catch (e: any) {
         console.warn('save tenant failed', e && ((e as any).response?.data || (e as any).message));
       }
-      setShowTenantModal(false);
+      // For create flow we keep modal open (editingTenant now contains history/docs).
+      // For update flow we close the modal — infer by presence of editingTenant.id
+      if (editingTenant && editingTenant.id) setShowTenantModal(false);
     })();
   }
 
@@ -1182,6 +1480,37 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                               >
                                 <Ionicons name="eye" size={18} />
                               </TouchableOpacity>
+                              {/* show agreement / document quick icons when available */}
+                              {item.history?.agreements && item.history.agreements.length > 0 ? (
+                                <TouchableOpacity
+                                  style={{ marginTop: 8, marginRight: 8 }}
+                                  onPress={() => {
+                                    try {
+                                      const agr = item.history.agreements[0];
+                                      const url =
+                                        agr && (agr.file_url || agr.fileUrl || agr.url || agr.path);
+                                      if (url) downloadAgreement(url);
+                                    } catch (e) {}
+                                  }}
+                                >
+                                  <Ionicons name="document-text" size={18} color="#374151" />
+                                </TouchableOpacity>
+                              ) : null}
+                              {item.history?.documents && item.history.documents.length > 0 ? (
+                                <TouchableOpacity
+                                  style={{ marginTop: 8, marginRight: 8 }}
+                                  onPress={() => {
+                                    try {
+                                      const doc = item.history.documents[0];
+                                      const url =
+                                        doc && (doc.file_url || doc.fileUrl || doc.url || doc.path);
+                                      if (url) handlePreview(url);
+                                    } catch (e) {}
+                                  }}
+                                >
+                                  <Ionicons name="document-attach" size={18} color="#374151" />
+                                </TouchableOpacity>
+                              ) : null}
                               {statusLoading[item.id] ? (
                                 <ActivityIndicator
                                   size="small"
@@ -1250,7 +1579,37 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                               >
                                 <Ionicons name="eye" size={18} />
                               </TouchableOpacity>
-                              {/* no activate button shown because reactivation is blocked by backend */}
+                              {/* show agreement / document quick icons when available */}
+                              {item.history?.agreements && item.history.agreements.length > 0 ? (
+                                <TouchableOpacity
+                                  style={{ marginTop: 8, marginRight: 8 }}
+                                  onPress={() => {
+                                    try {
+                                      const agr = item.history.agreements[0];
+                                      const url =
+                                        agr && (agr.file_url || agr.fileUrl || agr.url || agr.path);
+                                      if (url) downloadAgreement(url);
+                                    } catch (e) {}
+                                  }}
+                                >
+                                  <Ionicons name="document-text" size={18} color="#374151" />
+                                </TouchableOpacity>
+                              ) : null}
+                              {item.history?.documents && item.history.documents.length > 0 ? (
+                                <TouchableOpacity
+                                  style={{ marginTop: 8, marginRight: 8 }}
+                                  onPress={() => {
+                                    try {
+                                      const doc = item.history.documents[0];
+                                      const url =
+                                        doc && (doc.file_url || doc.fileUrl || doc.url || doc.path);
+                                      if (url) handlePreview(url);
+                                    } catch (e) {}
+                                  }}
+                                >
+                                  <Ionicons name="document-attach" size={18} color="#374151" />
+                                </TouchableOpacity>
+                              ) : null}
                             </View>
                           </View>
                         </View>
@@ -1295,6 +1654,36 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                           >
                             <Ionicons name="eye" size={18} />
                           </TouchableOpacity>
+                          {item.history?.agreements && item.history.agreements.length > 0 ? (
+                            <TouchableOpacity
+                              style={{ marginTop: 8, marginRight: 8 }}
+                              onPress={() => {
+                                try {
+                                  const agr = item.history.agreements[0];
+                                  const url =
+                                    agr && (agr.file_url || agr.fileUrl || agr.url || agr.path);
+                                  if (url) downloadAgreement(url);
+                                } catch (e) {}
+                              }}
+                            >
+                              <Ionicons name="document-text" size={18} color="#374151" />
+                            </TouchableOpacity>
+                          ) : null}
+                          {item.history?.documents && item.history.documents.length > 0 ? (
+                            <TouchableOpacity
+                              style={{ marginTop: 8, marginRight: 8 }}
+                              onPress={() => {
+                                try {
+                                  const doc = item.history.documents[0];
+                                  const url =
+                                    doc && (doc.file_url || doc.fileUrl || doc.url || doc.path);
+                                  if (url) handlePreview(url);
+                                } catch (e) {}
+                              }}
+                            >
+                              <Ionicons name="document-attach" size={18} color="#374151" />
+                            </TouchableOpacity>
+                          ) : null}
                           {statusLoading[item.id] ? (
                             <ActivityIndicator size="small" color="#fff" style={{ marginTop: 8 }} />
                           ) : item.status === 'active' ? (
@@ -1789,6 +2178,25 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 keyboardType="numeric"
                 editable={!editingReadOnly}
               />
+              <Text style={[styles.label, { marginTop: 10 }]}>Witness 1</Text>
+              <TextInput
+                style={styles.input}
+                value={editingTenant?.witness1 || ''}
+                onChangeText={(t) => setEditingTenant((s: any) => ({ ...s, witness1: t }))}
+                editable={!editingReadOnly}
+                placeholder="Name & contact"
+              />
+              <Text style={[styles.label, { marginTop: 8 }]}>Witness 2</Text>
+              <TextInput
+                style={styles.input}
+                value={editingTenant?.witness2 || ''}
+                onChangeText={(t) => setEditingTenant((s: any) => ({ ...s, witness2: t }))}
+                editable={!editingReadOnly}
+                placeholder="Name & contact"
+              />
+              <Text style={{ color: '#666', fontSize: 12, marginTop: 6 }}>
+                please verify with witness if he knows the tenant personally.
+              </Text>
               {/* Aadhaar / PAN uploads for tenant (owner can attach documents that tenant can view) */}
               <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Identity Documents</Text>
               <View style={{ flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 8 }}>
@@ -1927,7 +2335,25 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                             {item.file_url ? (
                               <TouchableOpacity
-                                onPress={() => handlePreview(item.file_url)}
+                                onPress={() => {
+                                  try {
+                                    const title = String(
+                                      item.title || item.name || item.file_url || ''
+                                    );
+                                    const isAgreement = /agreement|rent[-_ ]?agreement/i.test(
+                                      title
+                                    );
+                                    if (isAgreement) {
+                                      downloadAgreement(item.file_url);
+                                    } else {
+                                      handlePreview(item.file_url);
+                                    }
+                                  } catch (e) {
+                                    try {
+                                      handlePreview(item.file_url);
+                                    } catch (ee) {}
+                                  }
+                                }}
                                 style={{ padding: 6 }}
                               >
                                 <Ionicons name="eye-outline" size={18} color="#374151" />
@@ -2014,13 +2440,58 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 {!editingReadOnly ? (
                   <TouchableOpacity
                     style={styles.smallBtn}
-                    onPress={() => saveTenant(editingTenant)}
+                    onPress={() => setShowTenantConfirm(true)}
                   >
                     <Text style={{ color: '#fff' }}>Save</Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Tenant confirmation modal before creating/updating tenant and generating agreement */}
+      <Modal visible={showTenantConfirm} animationType="fade" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContent, { width: 360 }]}>
+            <Text style={{ fontWeight: '700', fontSize: 16, marginBottom: 8 }}>Please confirm</Text>
+            <ScrollView style={{ maxHeight: 320 }}>
+              <Text style={{ fontWeight: '700' }}>{editingTenant?.name}</Text>
+              <Text style={{ color: '#666', marginTop: 6 }}>{editingTenant?.phone}</Text>
+              <Text style={{ color: '#666', marginTop: 6 }}>{editingTenant?.address}</Text>
+              <View style={{ height: 8 }} />
+              <Text>Flat: {editingTenant?.flat?.flat_no || '—'}</Text>
+              <Text>Rent: ₹{editingTenant?.rent || '—'}</Text>
+              <Text>Deposit: ₹{editingTenant?.deposit || '—'}</Text>
+              <View style={{ height: 8 }} />
+              <Text style={{ fontWeight: '700', marginTop: 8 }}>Witnesses</Text>
+              <Text>{editingTenant?.witness1 || '—'}</Text>
+              <Text>{editingTenant?.witness2 || '—'}</Text>
+              <View style={{ height: 12 }} />
+              <Text style={{ color: '#444' }}>
+                Please verify all the information — based on these details the rent agreement will
+                be generated.
+              </Text>
+            </ScrollView>
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+              <TouchableOpacity
+                style={[styles.smallBtnClose, { marginRight: 8 }]}
+                onPress={() => setShowTenantConfirm(false)}
+              >
+                <Text style={styles.closeText}>Edit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.smallBtn}
+                onPress={() => {
+                  // proceed with actual save
+                  setShowTenantConfirm(false);
+                  saveTenant(editingTenant);
+                }}
+              >
+                <Text style={{ color: '#fff' }}>Confirm & Create</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -2429,6 +2900,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
             </TouchableOpacity>
 
             {previewImageUrl ? (
+              // show image inline when possible; non-image URLs will fallback to the "no preview" block
               <Image
                 source={{ uri: previewImageUrl }}
                 style={{
@@ -2438,14 +2910,205 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   backgroundColor: '#000',
                 }}
               />
+            ) : previewTargetUrl ? (
+              (() => {
+                const url = previewTargetUrl;
+                const isPdf = /^(data:application\/pdf)|.*\.(pdf)(\?.*)?$/i.test(url);
+                if (isPdf) {
+                  if (Platform.OS === 'web') {
+                    // on web open in new tab (WebView not supported reliably)
+                    try {
+                      if (typeof window !== 'undefined') window.open(url, '_blank');
+                    } catch (e) {}
+                    return (
+                      <View
+                        style={{
+                          backgroundColor: '#111',
+                          padding: 18,
+                          minHeight: 240,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Text style={{ color: '#fff', marginBottom: 12 }}>
+                          Opened PDF in a new tab.
+                        </Text>
+                        <TouchableOpacity
+                          style={[styles.smallBtn, { paddingHorizontal: 16 }]}
+                          onPress={() => setShowPreviewModal(false)}
+                        >
+                          <Text style={{ color: '#fff' }}>Close</Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  }
+
+                  // For native, try to show in-app via WebView. For remote PDFs, use Google Docs viewer wrapper.
+                  let sourceUri = url;
+                  if (/^https?:\/\//i.test(url)) {
+                    sourceUri = `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(
+                      url
+                    )}`;
+                  }
+                  return (
+                    <View style={{ width: '100%', height: 600, backgroundColor: '#000' }}>
+                      <WebView
+                        source={{ uri: sourceUri }}
+                        style={{ flex: 1 }}
+                        onLoadStart={() => setPreviewLoading(true)}
+                        onLoadEnd={() => setPreviewLoading(false)}
+                        onError={(e: any) => {
+                          console.warn('[OwnerScreen] WebView load error', e);
+                          setPreviewLoading(false);
+                        }}
+                      />
+                      {previewLoading ? (
+                        <View
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: 'rgba(0,0,0,0.4)',
+                            zIndex: 50,
+                          }}
+                        >
+                          <ActivityIndicator size="large" color="#fff" />
+                          <Text style={{ color: '#fff', marginTop: 12 }}>Loading preview...</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                }
+
+                // not pdf: show fallback with open button
+                return (
+                  <View
+                    style={{
+                      backgroundColor: '#111',
+                      padding: 18,
+                      minHeight: 240,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ color: '#fff', marginBottom: 12 }}>
+                      No inline preview available for this file.
+                    </Text>
+                    <TouchableOpacity
+                      style={[styles.smallBtn, { paddingHorizontal: 16 }]}
+                      onPress={async () => {
+                        try {
+                          const target = previewTargetUrl;
+                          if (!target) return;
+                          if (Platform.OS === 'web' && typeof window !== 'undefined') {
+                            window.open(target, '_blank');
+                            return;
+                          }
+                          await Linking.openURL(target);
+                        } catch (e) {
+                          console.warn('open external preview failed', e);
+                          try {
+                            const msg = e && (e as any).message ? (e as any).message : String(e);
+                            alert('Cannot open preview: ' + msg);
+                          } catch (ee) {}
+                        }
+                      }}
+                    >
+                      <Text style={{ color: '#fff' }}>Open in browser / external viewer</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })()
             ) : (
-              <View style={{ backgroundColor: '#fff', padding: 18 }}>
-                <Text style={{ color: '#333' }}>No preview available</Text>
+              <View
+                style={{
+                  backgroundColor: '#111',
+                  padding: 18,
+                  minHeight: 240,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text style={{ color: '#fff', marginBottom: 12 }}>
+                  No inline preview available for this file.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.smallBtn, { paddingHorizontal: 16 }]}
+                  onPress={async () => {
+                    try {
+                      const target = previewTargetUrl;
+                      if (!target) return;
+                      // attempt same openExternal logic: handle data: application/pdf -> write to file
+                      const isPdf = /^(data:application\/pdf)|.*\.(pdf)(\?.*)?$/i.test(target);
+                      if (
+                        isPdf &&
+                        target.startsWith('data:application/pdf') &&
+                        Platform.OS !== 'web'
+                      ) {
+                        try {
+                          const base64 = target.replace(/^data:application\/pdf;base64,/, '');
+                          const fname = `agreement_retry_${Date.now()}.pdf`;
+                          const fileUri = FileSystem.cacheDirectory + fname;
+                          await FileSystem.writeAsStringAsync(fileUri, base64, {
+                            encoding: FileSystem.EncodingType.Base64,
+                          });
+                          await Linking.openURL(fileUri);
+                          return;
+                        } catch (e) {
+                          console.warn('retry open pdf failed', e);
+                        }
+                      }
+                      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+                        window.open(target, '_blank');
+                        return;
+                      }
+                      await Linking.openURL(target);
+                    } catch (e) {
+                      console.warn('open external preview failed', e);
+                      try {
+                        const msg = e && (e as any).message ? (e as any).message : String(e);
+                        alert('Cannot open preview: ' + msg);
+                      } catch (ee) {}
+                    }
+                  }}
+                >
+                  <Text style={{ color: '#fff' }}>Open in browser / external viewer</Text>
+                </TouchableOpacity>
               </View>
             )}
 
             {/* footer kept for accessibility on small screens */}
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', padding: 12 }}>
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'flex-end',
+                padding: 12,
+                alignItems: 'center',
+              }}
+            >
+              {(previewImageUrl || previewTargetUrl) && (
+                <TouchableOpacity
+                  style={[styles.smallBtn, { marginRight: 8 }]}
+                  onPress={() => {
+                    try {
+                      downloadAgreement(previewImageUrl || previewTargetUrl);
+                    } catch (e) {
+                      console.warn('download from preview failed', e);
+                    }
+                  }}
+                >
+                  <Text style={{ color: '#fff' }}>Download</Text>
+                </TouchableOpacity>
+              )}
+
+              {previewLoading ? (
+                <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+              ) : null}
+
               <TouchableOpacity
                 style={styles.smallBtn}
                 onPress={() => {
