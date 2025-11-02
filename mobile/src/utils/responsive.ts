@@ -38,7 +38,9 @@ export function useWindowSize() {
     function onChange({ window }: { window: { width: number; height: number } }) {
       setSize({ width: window.width, height: window.height });
     }
-    const sub = Dimensions.addEventListener ? Dimensions.addEventListener('change', onChange) : (Dimensions as any).addEventListener('change', onChange);
+    const sub = Dimensions.addEventListener
+      ? Dimensions.addEventListener('change', onChange)
+      : (Dimensions as any).addEventListener('change', onChange);
     return () => {
       try {
         if (sub && sub.remove) sub.remove();

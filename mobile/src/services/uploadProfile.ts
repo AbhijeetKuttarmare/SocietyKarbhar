@@ -1,5 +1,12 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+
+// Compatibility shim for expo-file-system API surface changes
+const _FS: any = FileSystem as any;
+const _FSPaths: any = _FS.Paths || {};
+const CACHE_DIR = _FS.cacheDirectory ?? _FSPaths.cacheDirectory ?? '';
+const DOCUMENT_DIR = _FS.documentDirectory ?? _FSPaths.documentDirectory ?? '';
+const ENCODING_BASE64 = (_FS.EncodingType && _FS.EncodingType.Base64) ?? 'base64';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import api from './api';
@@ -114,9 +121,7 @@ export default async function pickAndUploadProfile(): Promise<string | null> {
     // Ensure we have base64 data; ImagePicker on native returns base64 when requested
     if (!base64) {
       // Try to read file as base64 from uri
-      base64 = await FileSystem.readAsStringAsync(fileUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: ENCODING_BASE64 });
     }
 
     if (!base64) throw new Error('failed to read file');
@@ -285,7 +290,7 @@ export async function pickAndUploadFile(options?: {
       // try to read base64 for fallback uploads
       try {
         base64 = await FileSystem.readAsStringAsync(res.uri as string, {
-          encoding: FileSystem.EncodingType.Base64,
+          encoding: ENCODING_BASE64,
         });
       } catch (e) {
         // ignore; we'll try multipart upload which doesn't need base64
@@ -318,9 +323,7 @@ export async function pickAndUploadFile(options?: {
     if (!base64) {
       // try to read base64 if missing
       try {
-        base64 = await FileSystem.readAsStringAsync(fileUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: ENCODING_BASE64 });
       } catch (e) {
         console.warn('[uploadProfile] failed to read base64 fallback', e);
       }

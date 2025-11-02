@@ -15,7 +15,7 @@ try {
   base = { expo: {} };
 }
 
-const DEFAULT_API = process.env.API_BASE_URL || 'http://192.168.1.12:4001';
+const DEFAULT_API = process.env.API_BASE_URL || 'http://192.168.1.16:4001';
 
 module.exports = () => {
   const expo = Object.assign({}, base.expo || {});

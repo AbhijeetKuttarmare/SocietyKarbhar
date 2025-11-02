@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  SafeAreaView,
   ScrollView,
   View,
   Text,
@@ -16,6 +15,7 @@ import {
   ActivityIndicator,
   Dimensions,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import api, { setToken, setAuthHeader } from '../services/api';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -427,9 +427,9 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '100%',
-    maxWidth: 520,
-    borderRadius: 20,
-    padding: 26,
+    maxWidth: Platform.OS === 'web' ? 520 : '95%',
+    borderRadius: Platform.OS === 'ios' ? 20 : 16,
+    padding: Platform.OS === 'ios' ? 26 : 20,
     backgroundColor: 'rgba(255,255,255,0.9)',
     shadowColor: '#0b1020',
     shadowOffset: { width: 0, height: 12 },
@@ -456,12 +456,12 @@ const styles = StyleSheet.create({
   },
   logoInitials: { fontSize: 22, fontWeight: '800', color: '#4f46e5' },
   title: {
-    fontSize: 28,
+    fontSize: Platform.OS === 'ios' ? 28 : 24,
     fontWeight: '700',
     color: '#0f172a',
     textAlign: 'center',
-    marginBottom: 18,
-    fontFamily: 'Inter',
+    marginBottom: Platform.OS === 'ios' ? 18 : 14,
+    fontFamily: Platform.select({ ios: 'Inter', android: 'normal' }),
   },
   panel: { width: '100%', marginTop: 6 },
   floatingLabelContainer: { marginBottom: 6 },
@@ -529,15 +529,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   otpInputModern: {
-    width: 48,
-    height: 56,
+    width: Platform.OS === 'ios' ? 48 : 42,
+    height: Platform.OS === 'ios' ? 56 : 50,
     borderRadius: 12,
     backgroundColor: '#fff',
     textAlign: 'center',
-    fontSize: 20,
+    fontSize: Platform.OS === 'ios' ? 20 : 18,
     borderWidth: 1,
     borderColor: 'rgba(15,23,42,0.06)',
-    marginHorizontal: 6,
+    marginHorizontal: 4,
   },
   otpInputFocused: {
     borderColor: '#4f46e5',

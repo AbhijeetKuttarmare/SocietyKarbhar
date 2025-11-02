@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   Switch,
@@ -21,9 +20,10 @@ import {
   Image,
   Linking,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import api from '../services/api';
 import { Ionicons } from '@expo/vector-icons';
-import BottomTab from '../components/BottomTab';
+import { BottomTabContext } from '../contexts/BottomTabContext';
 import * as FileSystem from 'expo-file-system';
 import ProfileCard from '../components/ProfileCard';
 import pickAndUploadProfile, {
@@ -720,6 +720,44 @@ export default function AdminScreen({ user, onLogout }: Props) {
     Animated.stagger(60, animations).start();
   }, [wingAnalytics]);
 
+  const bottomTab = React.useContext(BottomTabContext);
+
+  // when bottom tab changes, switch admin 'tab' appropriately
+  React.useEffect(() => {
+    try {
+      const k = bottomTab.activeKey;
+      if (k === 'home') setTab('dashboard');
+      else if (k === 'helplines') setTab('helplines');
+      else if (k === 'bills' || k === 'maintenance') setTab('maintenance');
+      else if (k === 'users') setTab('users');
+      else if (k === 'notices') setTab('notices');
+    } catch (e) {}
+  }, [bottomTab.activeKey]);
+
+  // open profile modal when bottom tab 'profile' is pressed
+  React.useEffect(() => {
+    try {
+      const k = bottomTab.activeKey;
+      if (k === 'profile') setShowProfileModal(true);
+      else setShowProfileModal(false);
+    } catch (e) {}
+  }, [bottomTab.activeKey]);
+
+  // push admin tab -> bottom tab context
+  React.useEffect(() => {
+    try {
+      const map: any = {
+        dashboard: 'home',
+        helplines: 'helplines',
+        maintenance: 'bills',
+        users: 'users',
+        notices: 'notices',
+      };
+      const k = map[tab] || 'home';
+      if (bottomTab.activeKey !== k) bottomTab.setActiveKey(k);
+    } catch (e) {}
+  }, [tab]);
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle={Platform.OS === 'ios' ? 'dark-content' : 'light-content'} />
@@ -951,9 +989,9 @@ export default function AdminScreen({ user, onLogout }: Props) {
             </View>
           </View>
 
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 48 }}>
+          <View style={{ flex: 1, paddingBottom: 48 }}>
             {tab === 'dashboard' && (
-              <View style={{ paddingVertical: 8 }}>
+              <View style={{ paddingVertical: 8, paddingBottom: 96 }}>
                 {lastApiError ? (
                   <View style={styles.errorBox}>
                     <Text style={styles.errorText}>API Error: {lastApiError}</Text>
@@ -1110,8 +1148,18 @@ export default function AdminScreen({ user, onLogout }: Props) {
 
             {tab === 'users' && (
               <View style={{ paddingVertical: 8 }}>
-                <View style={[styles.rowBetween, { paddingHorizontal: isMobile ? 6 : 0 }]}>
-                  <View style={{ flex: 1, marginRight: 8 }}>
+                <View
+                  style={[
+                    styles.rowBetween,
+                    {
+                      paddingHorizontal: isMobile ? 6 : 0,
+                      // stack controls on narrow screens to avoid overlap
+                      flexDirection: isMobile ? 'column' : 'row',
+                      alignItems: isMobile ? 'flex-start' : 'center',
+                    },
+                  ]}
+                >
+                  <View style={{ flex: 1, marginRight: isMobile ? 0 : 8 }}>
                     <TextInput
                       placeholder="Search name or phone"
                       value={q}
@@ -1202,115 +1250,165 @@ export default function AdminScreen({ user, onLogout }: Props) {
 
             {tab === 'maintenance' && (
               <View style={{ paddingVertical: 8 }}>
-                <View style={[styles.rowBetween, { paddingHorizontal: isMobile ? 6 : 0 }]}>
-                  <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={styles.sectionTitle}>Maintenance Settings</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
-                      <Text style={{ color: '#6b7280', marginRight: 8 }}>Monthly amount: ₹</Text>
-                      <TextInput
-                        value={maintenanceEditAmount}
-                        onChangeText={setMaintenanceEditAmount}
-                        keyboardType="numeric"
-                        style={[styles.input, { width: 140, paddingVertical: 6 }]}
-                        placeholder="0"
-                      />
-                      <View style={{ width: 8 }} />
-                      <TouchableOpacity
-                        style={[styles.smallBtn]}
-                        onPress={() => {
-                          const v = Number((maintenanceEditAmount || '').replace(/[^0-9.-]/g, ''));
-                          if (Number.isNaN(v)) return alert('Enter a valid amount');
-                          saveMaintenanceSetting(v);
+                {maintenanceLoading ? (
+                  <ActivityIndicator style={{ marginTop: 12 }} />
+                ) : (
+                  <FlatList
+                    data={(maintenanceGroups || []).sort(
+                      (a: any, b: any) => (b.unpaidAmount || 0) - (a.unpaidAmount || 0)
+                    )}
+                    keyExtractor={(g: any) => String(g.id || g.name)}
+                    contentContainerStyle={{ paddingBottom: 96 }}
+                    ListHeaderComponent={() => (
+                      <View
+                        style={{
+                          paddingBottom: 8,
+                          paddingHorizontal: isMobile ? 6 : 0,
                         }}
                       >
-                        <Text style={{ color: '#fff' }}>Save</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Button title="Generate" onPress={() => setShowGenerateConfirm(true)} />
-                  </View>
-                </View>
-
-                <View style={{ marginTop: 12, paddingHorizontal: isMobile ? 6 : 0 }}>
-                  <Text style={styles.sectionTitle}>Monthly Maintenance - Owners</Text>
-                  {maintenanceLoading ? (
-                    <ActivityIndicator style={{ marginTop: 12 }} />
-                  ) : (
-                    <FlatList
-                      data={(maintenanceGroups || []).sort(
-                        (a: any, b: any) => (b.unpaidAmount || 0) - (a.unpaidAmount || 0)
-                      )}
-                      keyExtractor={(g: any) => String(g.id || g.name)}
-                      renderItem={({ item }) => (
-                        <View style={[styles.listItem, { alignItems: 'center' }]}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.listTitle}>{item.name || 'Unknown'}</Text>
-                            <Text style={styles.listSub}>
-                              Due: ₹{item.unpaidAmount || 0} • Total: ₹{item.totalAmount || 0}
-                            </Text>
-                            <Text style={{ color: item.unpaidAmount > 0 ? '#b45309' : '#10b981' }}>
-                              {item.unpaidAmount > 0 ? 'Overdue' : 'Paid'}
-                            </Text>
+                        <View
+                          style={[
+                            styles.rowBetween,
+                            {
+                              // stack controls on narrow screens to avoid overlap
+                              flexDirection: isMobile ? 'column' : 'row',
+                              alignItems: isMobile ? 'flex-start' : 'center',
+                            },
+                          ]}
+                        >
+                          <View
+                            style={{
+                              width: isMobile ? '100%' : undefined,
+                              marginRight: isMobile ? 0 : 8,
+                            }}
+                          >
+                            <Text style={styles.sectionTitle}>Maintenance Settings</Text>
+                            <View
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                marginTop: 6,
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <Text style={{ color: '#6b7280', marginRight: 8 }}>
+                                Monthly amount: ₹
+                              </Text>
+                              <TextInput
+                                value={maintenanceEditAmount}
+                                onChangeText={setMaintenanceEditAmount}
+                                keyboardType="numeric"
+                                style={[styles.input, { width: 140, paddingVertical: 6 }]}
+                                placeholder="0"
+                              />
+                              <View style={{ width: 8 }} />
+                              <TouchableOpacity
+                                style={[styles.smallBtn, { marginTop: 6 }]}
+                                onPress={() => {
+                                  const v = Number(
+                                    (maintenanceEditAmount || '').replace(/[^0-9.-]/g, '')
+                                  );
+                                  if (Number.isNaN(v)) return alert('Enter a valid amount');
+                                  saveMaintenanceSetting(v);
+                                }}
+                              >
+                                <Text style={{ color: '#fff' }}>Save</Text>
+                              </TouchableOpacity>
+                            </View>
                           </View>
-                          <View style={{ flexDirection: 'column', alignItems: 'flex-end' }}>
-                            <TouchableOpacity
-                              style={[styles.smallBtn]}
-                              onPress={() => {
-                                // open detail: list of bills for this owner
-                                Alert.alert(
-                                  item.name || 'Owner',
-                                  `${item.bills?.length || 0} bills\nUnpaid: ₹${
-                                    item.unpaidAmount || 0
-                                  }`,
-                                  [
-                                    { text: 'Close' },
-                                    {
-                                      text: 'Mark all Paid',
-                                      onPress: async () => {
-                                        // mark each bill as approved
-                                        for (const b of item.bills || []) {
-                                          if ((b.status || '') !== 'closed') {
-                                            await adminVerifyBill(b.id, 'approve');
-                                          }
-                                        }
-                                        fetchMaintenanceFees(maintenanceMonth || undefined, 'all');
-                                      },
-                                    },
-                                  ]
-                                );
+
+                          <View
+                            style={{
+                              width: isMobile ? '100%' : undefined,
+                              marginTop: isMobile ? 8 : 0,
+                            }}
+                          >
+                            <View
+                              style={{
+                                flexDirection: 'row',
+                                justifyContent: isMobile ? 'flex-end' : 'flex-start',
                               }}
                             >
-                              <Text style={{ color: '#fff' }}>Actions</Text>
-                            </TouchableOpacity>
-                            <View style={{ height: 6 }} />
-                            <TouchableOpacity
-                              style={styles.smallBtnClose}
-                              onPress={() => {
-                                // open bills in browser if proof exists
-                                const firstProof = (item.bills || []).find(
-                                  (x: any) => x.payment_proof_url
-                                );
-                                if (firstProof && firstProof.payment_proof_url) {
-                                  try {
-                                    (require('react-native').Linking as any).openURL(
-                                      firstProof.payment_proof_url
-                                    );
-                                  } catch (e) {}
-                                } else Alert.alert('No proof available');
-                              }}
-                            >
-                              <Text style={{ color: '#374151' }}>View Proof</Text>
-                            </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.smallBtn, { backgroundColor: '#1e90ff' }]}
+                                onPress={() => setShowGenerateConfirm(true)}
+                              >
+                                <Text style={{ color: '#fff' }}>Generate</Text>
+                              </TouchableOpacity>
+                            </View>
                           </View>
                         </View>
-                      )}
-                    />
-                  )}
-                </View>
+
+                        <View style={{ marginTop: 12 }}>
+                          <Text style={styles.sectionTitle}>Monthly Maintenance - Owners</Text>
+                        </View>
+                      </View>
+                    )}
+                    renderItem={({ item }) => (
+                      <View style={[styles.listItem, { alignItems: 'center' }]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.listTitle}>{item.name || 'Unknown'}</Text>
+                          <Text style={styles.listSub}>
+                            Due: ₹{item.unpaidAmount || 0} • Total: ₹{item.totalAmount || 0}
+                          </Text>
+                          <Text style={{ color: item.unpaidAmount > 0 ? '#b45309' : '#10b981' }}>
+                            {item.unpaidAmount > 0 ? 'Overdue' : 'Paid'}
+                          </Text>
+                        </View>
+                        <View style={{ flexDirection: 'column', alignItems: 'flex-end' }}>
+                          <TouchableOpacity
+                            style={[styles.smallBtn]}
+                            onPress={() => {
+                              Alert.alert(
+                                item.name || 'Owner',
+                                `${item.bills?.length || 0} bills\nUnpaid: ₹${
+                                  item.unpaidAmount || 0
+                                }`,
+                                [
+                                  { text: 'Close' },
+                                  {
+                                    text: 'Mark all Paid',
+                                    onPress: async () => {
+                                      for (const b of item.bills || []) {
+                                        if ((b.status || '') !== 'closed') {
+                                          await adminVerifyBill(b.id, 'approve');
+                                        }
+                                      }
+                                      fetchMaintenanceFees(maintenanceMonth || undefined, 'all');
+                                    },
+                                  },
+                                ]
+                              );
+                            }}
+                          >
+                            <Text style={{ color: '#fff' }}>Actions</Text>
+                          </TouchableOpacity>
+                          <View style={{ height: 6 }} />
+                          <TouchableOpacity
+                            style={styles.smallBtnClose}
+                            onPress={() => {
+                              const firstProof = (item.bills || []).find(
+                                (x: any) => x.payment_proof_url
+                              );
+                              if (firstProof && firstProof.payment_proof_url) {
+                                try {
+                                  (require('react-native').Linking as any).openURL(
+                                    firstProof.payment_proof_url
+                                  );
+                                } catch (e) {}
+                              } else Alert.alert('No proof available');
+                            }}
+                          >
+                            <Text style={{ color: '#374151' }}>View Proof</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
+                  />
+                )}
               </View>
             )}
-          </ScrollView>
+          </View>
         </View>
       </View>
 
@@ -1538,24 +1636,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
         </View>
       </Modal>
 
-      <BottomTab
-        activeKey={tab}
-        onChange={(k: any) => {
-          if (k === 'profile') {
-            setShowProfileModal(true);
-          } else {
-            setTab(k);
-          }
-        }}
-        items={[
-          { key: 'dashboard', label: 'Dashboard', icon: 'speedometer' },
-          { key: 'helplines', label: 'Helplines', icon: 'call-outline' },
-          { key: 'maintenance', label: 'Maintenance', icon: 'cash' },
-          { key: 'users', label: 'Users', icon: 'people-outline' },
-          { key: 'notices', label: 'Notices', icon: 'notifications-outline' },
-          { key: 'profile', label: 'Profile', icon: 'person' },
-        ]}
-      />
+      {/* BottomTab moved to App.tsx — AdminScreen syncs with BottomTabContext */}
 
       {/* MODALS: keep behavior but mobile-friendly sizes */}
 
@@ -1906,7 +1987,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
       <Modal visible={showUserDetail} animationType="slide" transparent>
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalContentLarge, { maxHeight: '85%' }]}>
-            <ScrollView>
+            <View>
               <Text style={styles.modalTitle}>{detailUser?.user?.name || 'User'}</Text>
               <Text style={styles.label}>Phone: {detailUser?.user?.phone}</Text>
 
@@ -2068,7 +2149,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
               <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
                 <Button title="Close" onPress={() => setShowUserDetail(false)} />
               </View>
-            </ScrollView>
+            </View>
 
             {/* Inline preview overlay: appears above the form inside the same modal */}
             {showPreviewModal && (

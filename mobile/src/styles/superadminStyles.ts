@@ -150,9 +150,10 @@ export const styles = StyleSheet.create({
   panelTitle: { fontSize: 18, fontWeight: '800', marginBottom: 8 },
   panelText: { color: '#6b7280' },
 
-  socCardsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  socCardsRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' },
   socCard: {
-    width: 280,
+    // allow responsive overrides; keep a max width for larger screens
+    maxWidth: 280,
     backgroundColor: '#fff',
     padding: 12,
     borderRadius: 10,

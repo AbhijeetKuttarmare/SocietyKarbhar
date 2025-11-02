@@ -8,6 +8,7 @@ import {
   Alert,
   TextInput,
   Modal,
+  useWindowDimensions,
 } from 'react-native';
 import api from '../../services/api';
 import { Feather } from '@expo/vector-icons';
@@ -28,6 +29,9 @@ type Society = {
 };
 
 export default function SocietiesScreen({ user }: Props) {
+  const { width } = useWindowDimensions();
+  const isMobile = width < 700;
+  const cardWidth = isMobile ? '100%' : 280;
   const TAB_HEIGHT = 72;
   const [societies, setSocieties] = useState<Society[]>([]);
   const [loading, setLoading] = useState(false);

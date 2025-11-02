@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   Button,
@@ -15,10 +14,11 @@ import {
   Image,
   Linking,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import api from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import BottomTab from '../components/BottomTab';
+import { BottomTabContext } from '../contexts/BottomTabContext';
 import ProfileCard from '../components/ProfileCard';
 import OwnerScreen from './OwnerScreen';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
@@ -451,6 +451,35 @@ export default function TenantScreen({ user, onLogout }: Props) {
     if (flat) parts.push(String(flat));
     return parts.join(' / ');
   })();
+
+  const bottomTab = React.useContext(BottomTabContext);
+
+  // sync context -> local tab
+  React.useEffect(() => {
+    try {
+      const k = bottomTab.activeKey;
+      if (k === 'tenants') {
+        // tenant's 'tenants' maps to local 'owner' tab
+        if (user && user.role === 'tenant') setTab('owner');
+        if (user && user.role === 'owner') setShowOwnerDashboard(true);
+      } else if (k === 'home' || k === 'profile' || k === 'maintenance' || k === 'bills') {
+        setShowOwnerDashboard(false);
+        setTab(
+          k === 'home' ? 'home' : k === 'profile' ? 'profile' : k === 'bills' ? 'rent' : 'home'
+        );
+      }
+    } catch (e) {}
+  }, [bottomTab.activeKey]);
+
+  // push local tab changes to context when user changes tab internally
+  React.useEffect(() => {
+    try {
+      // map local tab -> context key
+      const map: any = { home: 'home', profile: 'profile', owner: 'tenants', rent: 'bills' };
+      const key = map[tab] || tab;
+      if (key && bottomTab.activeKey !== key) bottomTab.setActiveKey(key);
+    } catch (e) {}
+  }, [tab]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -1397,55 +1426,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
         </View>
       </Modal>
 
-      {/* Bottom tab (mobile) - intercept 'tenants' key so owner users open Owner dashboard
-          Previously the shared BottomTab could emit a 'tenants' key which TenantScreen did not handle
-          (resulting in a blank main area). Here we route 'tenants' -> OwnerScreen for owner-role users. */}
-      {!isMobile ? null : (
-        // compute bottom items dynamically so 'My Owner' (tenants) is only shown to tenant role
-        <BottomTab
-          // map tenant-owned 'owner' tab to the BottomTab key 'tenants' so the bottom bar highlights correctly
-          activeKey={showOwnerDashboard ? 'tenants' : tab === 'owner' ? 'tenants' : tab}
-          items={(() => {
-            const items: any[] = [
-              { key: 'home', label: 'Home', icon: 'home' },
-              { key: 'helplines', label: 'Helplines', icon: 'call' },
-            ];
-            // include tenant-facing "My Owner" only for tenant users
-            if (user && user.role === 'tenant') {
-              items.push({ key: 'tenants', label: 'My Owner', icon: 'people' });
-            }
-            items.push({ key: 'profile', label: 'Profile', icon: 'person' });
-            return items;
-          })()}
-          onChange={(k: any) => {
-            try {
-              if (k === 'tenants') {
-                if (user && user.role === 'owner') {
-                  // show Owner dashboard inline so Add Tenant UI is visible for owner users
-                  setShowOwnerDashboard(true);
-                  return;
-                }
-                // For tenant users: ensure we refresh owner data before showing owner view
-                setShowOwnerDashboard(false);
-                if (user && user.role === 'tenant') {
-                  // fetch latest owner details then switch to owner tab
-                  fetchOwner();
-                  setTab('owner');
-                } else {
-                  // fallback: switch to owner tab
-                  setTab('owner');
-                }
-                return;
-              }
-              // any other tab: hide owner dashboard and change tenant tab state
-              setShowOwnerDashboard(false);
-              setTab(k);
-            } catch (e) {
-              console.warn('BottomTab onChange handler failed', e);
-            }
-          }}
-        />
-      )}
+      {/* BottomTab is now rendered at the app root (App.tsx) so it stays fixed across screens */}
     </SafeAreaView>
   );
 }
@@ -1518,7 +1499,9 @@ const styles: any = StyleSheet.create({
     marginBottom: 12,
   },
   statCard: {
-    width: '48%',
+    // use flexBasis so cards wrap reliably on narrow screens and allow minWidth to avoid extreme squashing
+    flexBasis: '48%',
+    minWidth: 140,
     backgroundColor: palette.card,
     padding: 12,
     borderRadius: 12,
@@ -1527,6 +1510,8 @@ const styles: any = StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 6,
+    // ensure children don't paint outside rounded corners
+    overflow: 'hidden',
   },
   iconCircle: {
     width: 36,
@@ -1537,7 +1522,7 @@ const styles: any = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 8,
   },
-  statTitle: { fontWeight: '700' },
+  statTitle: { fontWeight: '700', flexShrink: 1, flexWrap: 'wrap' },
   statValue: { fontWeight: '800', fontSize: 18, marginTop: 6 },
   section: { marginTop: 12, backgroundColor: 'transparent' },
   sectionTitle: { fontWeight: '800', marginBottom: 8 },
@@ -1565,8 +1550,8 @@ const styles: any = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  listTitle: { fontWeight: '700' },
-  listSub: { color: '#6b7280', marginTop: 4 },
+  listTitle: { fontWeight: '700', flexWrap: 'wrap', flexShrink: 1 },
+  listSub: { color: '#6b7280', marginTop: 4, flexWrap: 'wrap' },
   smallMuted: { color: '#6b7280' },
   muted: { color: '#6b7280', marginTop: 8 },
   input: {

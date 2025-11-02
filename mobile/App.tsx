@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { SafeAreaView, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api, { setAuthHeader, setToken } from './src/services/api';
 import LoginScreen from './src/screens/LoginScreen';
@@ -7,8 +8,10 @@ import SuperadminScreen from './src/screens/SuperadminScreen';
 import AdminScreen from './src/screens/AdminScreen';
 import OwnerScreen from './src/screens/OwnerScreen';
 import TenantScreen from './src/screens/TenantScreen';
+import BottomTab from './src/components/BottomTab';
+import { BottomTabProvider, BottomTabContext } from './src/contexts/BottomTabContext';
 
-export default function App(): JSX.Element {
+export default function App() {
   const [user, setUser] = useState<any | null>(null);
 
   const [restored, setRestored] = useState(false);
@@ -73,22 +76,54 @@ export default function App(): JSX.Element {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      {!user ? (
-        <LoginScreen onLogin={handleLogin} />
-      ) : (
-        (() => {
-          const role = user?.role;
-          if (role === 'superadmin')
-            return <SuperadminScreen user={user} onLogout={handleLogout} />;
-          if (role === 'admin') return <AdminScreen user={user} onLogout={handleLogout} />;
-          if (role === 'owner') return <OwnerScreen user={user} onLogout={handleLogout} />;
-          if (role === 'tenant') return <TenantScreen user={user} onLogout={handleLogout} />;
-          return <TenantScreen user={user} onLogout={handleLogout} />;
-        })()
-      )}
-    </SafeAreaView>
+    <SafeAreaProvider>
+      <BottomTabProvider>
+        <SafeAreaView style={styles.container}>
+          {!user ? (
+            <LoginScreen onLogin={handleLogin} />
+          ) : (
+            (() => {
+              const role = user?.role;
+              if (role === 'superadmin')
+                return <SuperadminScreen user={user} onLogout={handleLogout} />;
+              if (role === 'admin') return <AdminScreen user={user} onLogout={handleLogout} />;
+              if (role === 'owner') return <OwnerScreen user={user} onLogout={handleLogout} />;
+              if (role === 'tenant') return <TenantScreen user={user} onLogout={handleLogout} />;
+              return <TenantScreen user={user} onLogout={handleLogout} />;
+            })()
+          )}
+          {/* Global bottom tab - fixed across all screens. Render only when user is logged in */}
+          {user ? <BottomTabWrapper user={user} /> : null}
+        </SafeAreaView>
+      </BottomTabProvider>
+    </SafeAreaProvider>
   );
+}
+
+// Small wrapper resolves tab items based on user role and syncs with context
+function BottomTabWrapper({ user }: { user: any }) {
+  const ctx = React.useContext(BottomTabContext);
+  // Build bottom items per-role so role-specific screens (e.g. Superadmin)
+  // receive the keys they expect.
+  let items: any[] = [];
+  if (user && user.role === 'superadmin') {
+    items = [
+      { key: 'home', label: 'Dashboard', icon: 'home' },
+      { key: 'societies', label: 'Societies', icon: 'business' },
+      { key: 'admins', label: 'Admins', icon: 'people' },
+      { key: 'profile', label: 'Profile', icon: 'person' },
+    ];
+  } else {
+    items.push({ key: 'home', label: 'Home', icon: 'home' });
+    items.push({ key: 'helplines', label: 'Helplines', icon: 'call' });
+    if (user && user.role === 'tenant') {
+      items.push({ key: 'tenants', label: 'My Owner', icon: 'people' });
+    }
+    items.push({ key: 'bills', label: 'Bills', icon: 'receipt' });
+    items.push({ key: 'profile', label: 'Profile', icon: 'person' });
+  }
+
+  return <BottomTab activeKey={ctx.activeKey} onChange={ctx.setActiveKey} items={items} />;
 }
 
 const styles = StyleSheet.create({

@@ -20,7 +20,7 @@ import { Linking } from 'react-native';
 import pickAndUploadProfile from '../services/uploadProfile';
 import DashboardScreen from './Superadmin/DashboardScreen';
 import { MaterialIcons, Feather } from '@expo/vector-icons';
-import BottomTab from '../components/BottomTab';
+import { BottomTabContext } from '../contexts/BottomTabContext';
 
 type Props = { user: any; onLogout: () => void };
 type Society = {
@@ -35,6 +35,7 @@ type Society = {
 export default function SuperadminScreen({ user, onLogout }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width < 700;
+  const cardWidth = isMobile ? '100%' : 280;
   // Fixed bottom tab height used to reserve space for content
   const TAB_HEIGHT = 72;
   const [societies, setSocieties] = useState<Society[]>([]);
@@ -64,6 +65,46 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
   // Debug: log render and active tab to help diagnose blank screen issues
   useEffect(() => {
     console.log('[SuperadminScreen] render - activeTab=', activeTab);
+  }, [activeTab]);
+
+  const bottomTab = React.useContext(BottomTabContext);
+
+  // Sync global bottom tab -> local activeTab
+  useEffect(() => {
+    try {
+      const k = bottomTab.activeKey;
+      // map global keys to superadmin local tabs
+      if (k === 'home') setActiveTab('Dashboard');
+      else if (k === 'societies' || k === 'browses') setActiveTab('Societies');
+      else if (k === 'admins') setActiveTab('Admins');
+      else if (k === 'buildings') setActiveTab('Buildings');
+      else if (k === 'plans') setActiveTab('Plans');
+      else if (k === 'reports') setActiveTab('Reports');
+      else if (k === 'logs') setActiveTab('Logs');
+      else if (k === 'settings') setActiveTab('Settings');
+      else if (k === 'profile') {
+        // open profile modal when bottom 'profile' key is pressed
+        setShowProfileModal(true);
+      }
+    } catch (e) {}
+  }, [bottomTab.activeKey]);
+
+  // Sync local activeTab -> global bottom tab
+  useEffect(() => {
+    try {
+      const map: any = {
+        Dashboard: 'home',
+        Societies: 'societies',
+        Admins: 'admins',
+        Buildings: 'buildings',
+        Plans: 'plans',
+        Reports: 'reports',
+        Logs: 'logs',
+        Settings: 'profile', // map Settings to profile tab so Settings highlights profile
+      };
+      const k = map[activeTab] || 'home';
+      if (bottomTab.activeKey !== k) bottomTab.setActiveKey(k);
+    } catch (e) {}
   }, [activeTab]);
 
   // UI state
@@ -445,6 +486,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                             style={[
                               styles.card,
                               {
+                                width: cardWidth,
                                 flexDirection: 'row',
                                 alignItems: 'center',
                                 padding: 12,
@@ -920,42 +962,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
               </View>
             </View>
           </Modal>
-          {/* Fixed BottomTab inside root so it won't be pushed out by long content */}
-          <View
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: TAB_HEIGHT,
-              borderTopWidth: 1,
-              borderColor: '#e6e9f2',
-              backgroundColor: '#fff',
-              justifyContent: 'center',
-              paddingHorizontal: 8,
-              zIndex: 50,
-              elevation: 50,
-            }}
-            pointerEvents="box-none"
-          >
-            <BottomTab
-              activeKey={activeTab}
-              onChange={(k: any) => {
-                if (k === 'Profile') {
-                  // open profile modal instead of switching to a view
-                  setShowProfileModal(true);
-                } else {
-                  setActiveTab(k);
-                }
-              }}
-              items={[
-                { key: 'Dashboard', label: 'Dashboard', icon: 'home' },
-                { key: 'Societies', label: 'Societies', icon: 'business' },
-                { key: 'Admins', label: 'Admins', icon: 'people' },
-                { key: 'Profile', label: 'Profile', icon: 'person' },
-              ]}
-            />
-          </View>
+          {/* BottomTab is rendered at the app root (App.tsx) and synced via BottomTabContext */}
         </View>
       </View>
     </>

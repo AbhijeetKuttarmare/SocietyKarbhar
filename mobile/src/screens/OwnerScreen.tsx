@@ -36,6 +36,7 @@ try {
 }
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { wp, hp, useWindowSize } from '../utils/responsive';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 
 type Props = {
@@ -523,6 +524,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   const isDesktop = width >= 900;
   const isTablet = width >= 600 && width < 900;
   const isMobile = width < 600;
+  const insets = useSafeAreaInsets();
 
   // derive society and flat/wing display values for header
   const societyName =
@@ -1179,86 +1181,96 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
             This makes the action obvious in web responsive and wide viewports where FABs or small icons may be missed */}
         {/* Tenants header banner removed per request */}
 
-        <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
+        <View style={{ flex: 1 }}>
           {activeTab === 'dashboard' && (
-            <View>
-              {/* Stats arranged as requested: first row -> Total Tenants & Active; second row -> Previous & Maintenance
+            <ScrollView
+              contentContainerStyle={{
+                paddingBottom: 120 + insets.bottom,
+                paddingHorizontal: isMobile ? 6 : 0,
+              }}
+            >
+              <View>
+                {/* Stats arranged as requested: first row -> Total Tenants & Active; second row -> Previous & Maintenance
                   Docs kept below and a Raise Complaint button added. */}
-              <View style={styles.statsRowRow}>
-                <StatCard title="Total Tenants" value={stats.totalTenants} />
-                <StatCard title="Active" value={stats.active} />
-              </View>
-              <View style={styles.statsRowRow}>
-                <StatCard title="Previous" value={stats.previous} />
-                <StatCard title="Bills" value={stats.billsAmount ? `₹${stats.billsAmount}` : 0} />
-              </View>
-              <View style={{ flexDirection: 'row', marginTop: 6 }}>
-                <StatCard title="Docs" value={stats.documents} />
-              </View>
-              <View style={{ marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <TouchableOpacity
-                  style={[styles.smallBtn, { alignSelf: 'flex-start', marginRight: 8 }]}
-                  onPress={() => setShowOwnerComplaintModal(true)}
-                >
-                  <Text style={{ color: '#fff', fontWeight: '700' }}>Raise Complaint</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.smallBtn, { alignSelf: 'flex-start', backgroundColor: '#1abc9c' }]}
-                  onPress={() => setShowOwnerBillsModal(true)}
-                >
-                  <Text style={{ color: '#fff', fontWeight: '700' }}>Bills</Text>
-                </TouchableOpacity>
-              </View>
-              {/* Tenant financial summary: rent and documents (best-effort - payments/bills may not be tracked) */}
-              <View style={{ marginTop: 12 }}>
-                <Text style={styles.sectionTitle}>Tenant Financials (current month)</Text>
-                {tenants.length === 0 ? (
-                  <View style={{ padding: 12 }}>
-                    <Text style={{ color: '#666' }}>No tenants available.</Text>
-                  </View>
-                ) : (
-                  tenants.map((t) => (
-                    <View
-                      key={t.id}
-                      style={{
-                        padding: 12,
-                        backgroundColor: '#fff',
-                        borderRadius: 8,
-                        marginBottom: 8,
-                      }}
-                    >
+                <View style={styles.statsRowRow}>
+                  <StatCard title="Total Tenants" value={stats.totalTenants} />
+                  <StatCard title="Active" value={stats.active} />
+                </View>
+                <View style={styles.statsRowRow}>
+                  <StatCard title="Previous" value={stats.previous} />
+                  <StatCard title="Bills" value={stats.billsAmount ? `₹${stats.billsAmount}` : 0} />
+                </View>
+                <View style={{ flexDirection: 'row', marginTop: 6 }}>
+                  <StatCard title="Docs" value={stats.documents} />
+                </View>
+                <View style={{ marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <TouchableOpacity
+                    style={[styles.smallBtn, { alignSelf: 'flex-start', marginRight: 8 }]}
+                    onPress={() => setShowOwnerComplaintModal(true)}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700' }}>Raise Complaint</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.smallBtn,
+                      { alignSelf: 'flex-start', backgroundColor: '#1abc9c' },
+                    ]}
+                    onPress={() => setShowOwnerBillsModal(true)}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700' }}>Bills</Text>
+                  </TouchableOpacity>
+                </View>
+                {/* Tenant financial summary: rent and documents (best-effort - payments/bills may not be tracked) */}
+                <View style={{ marginTop: 12 }}>
+                  <Text style={styles.sectionTitle}>Tenant Financials (current month)</Text>
+                  {tenants.length === 0 ? (
+                    <View style={{ padding: 12 }}>
+                      <Text style={{ color: '#666' }}>No tenants available.</Text>
+                    </View>
+                  ) : (
+                    tenants.map((t) => (
                       <View
+                        key={t.id}
                         style={{
-                          flexDirection: 'row',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
+                          padding: 12,
+                          backgroundColor: '#fff',
+                          borderRadius: 8,
+                          marginBottom: 8,
                         }}
                       >
-                        <View>
-                          <Text style={{ fontWeight: '700' }}>{t.name}</Text>
-                          <Text style={{ color: '#666' }}>{t.phone}</Text>
-                        </View>
-                        <View style={{ alignItems: 'flex-end' }}>
-                          <Text>Rent: ₹{t.rent || '—'}</Text>
-                          <View style={{ marginTop: 6, alignItems: 'flex-end' }}>
-                            {tenantDueMap[t.id] && tenantDueMap[t.id] > 0 ? (
-                              <View style={[styles.badge, { backgroundColor: '#e67e22' }]}>
-                                <Text style={{ color: '#fff' }}>Due: ₹{tenantDueMap[t.id]}</Text>
-                              </View>
-                            ) : (
-                              <View style={[styles.badge, { backgroundColor: '#2ecc71' }]}>
-                                <Text style={{ color: '#fff' }}>No due</Text>
-                              </View>
-                            )}
+                        <View
+                          style={{
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <View>
+                            <Text style={{ fontWeight: '700' }}>{t.name}</Text>
+                            <Text style={{ color: '#666' }}>{t.phone}</Text>
+                          </View>
+                          <View style={{ alignItems: 'flex-end' }}>
+                            <Text>Rent: ₹{t.rent || '—'}</Text>
+                            <View style={{ marginTop: 6, alignItems: 'flex-end' }}>
+                              {tenantDueMap[t.id] && tenantDueMap[t.id] > 0 ? (
+                                <View style={[styles.badge, { backgroundColor: '#e67e22' }]}>
+                                  <Text style={{ color: '#fff' }}>Due: ₹{tenantDueMap[t.id]}</Text>
+                                </View>
+                              ) : (
+                                <View style={[styles.badge, { backgroundColor: '#2ecc71' }]}>
+                                  <Text style={{ color: '#fff' }}>No due</Text>
+                                </View>
+                              )}
+                            </View>
                           </View>
                         </View>
                       </View>
-                    </View>
-                  ))
-                )}
+                    ))
+                  )}
+                </View>
+                {/* Quick Actions moved to My Tenants - hidden on Dashboard per request */}
               </View>
-              {/* Quick Actions moved to My Tenants - hidden on Dashboard per request */}
-            </View>
+            </ScrollView>
           )}
 
           {activeTab === 'notices' && (
@@ -1999,7 +2011,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               </View>
             </View>
           )}
-        </ScrollView>
+        </View>
       </View>
 
       {/* Tenant modal */}
@@ -2499,7 +2511,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       {/* Confirmation modal for activate/deactivate */}
       <Modal visible={!!confirmAction} animationType="fade" transparent>
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContent, { width: Math.min(320, wp(90)) }]}> 
+          <View style={[styles.modalContent, { width: Math.min(320, wp(90)) }]}>
             <Text style={{ fontWeight: '700', fontSize: 16, marginBottom: 8 }}>Confirm action</Text>
             <Text style={{ color: '#333', marginBottom: 12 }}>
               {confirmAction
@@ -2899,17 +2911,17 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               <Ionicons name="close" size={22} color="#fff" />
             </TouchableOpacity>
 
-              {previewImageUrl ? (
+            {previewImageUrl ? (
               // show image inline when possible; non-image URLs will fallback to the "no preview" block
-                <Image
-                  source={{ uri: previewImageUrl }}
-                  style={{
-                    width: '100%',
-                    height: hp(60),
-                    resizeMode: 'contain',
-                    backgroundColor: '#000',
-                  }}
-                />
+              <Image
+                source={{ uri: previewImageUrl }}
+                style={{
+                  width: '100%',
+                  height: hp(60),
+                  resizeMode: 'contain',
+                  backgroundColor: '#000',
+                }}
+              />
             ) : previewTargetUrl ? (
               (() => {
                 const url = previewTargetUrl;
@@ -2929,7 +2941,9 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                           justifyContent: 'center',
                         }}
                       >
-                        <Text style={{ color: '#fff', marginBottom: 12 }}>Opened PDF in a new tab.</Text>
+                        <Text style={{ color: '#fff', marginBottom: 12 }}>
+                          Opened PDF in a new tab.
+                        </Text>
                         <TouchableOpacity
                           style={[styles.smallBtn, { paddingHorizontal: 16 }]}
                           onPress={() => setShowPreviewModal(false)}
@@ -3122,7 +3136,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       {/* Helpline add modal */}
       <Modal visible={showHelplineModal} animationType="slide" transparent>
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContent, { width: Math.min(360, wp(95)) }]}> 
+          <View style={[styles.modalContent, { width: Math.min(360, wp(95)) }]}>
             <Text style={{ fontWeight: '800', fontSize: 18, marginBottom: 8 }}>Add Helpline</Text>
             <Text style={styles.label}>Name</Text>
             <TextInput
