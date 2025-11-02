@@ -9,7 +9,6 @@ import {
   TextInput,
   ScrollView,
   Image,
-  useWindowDimensions,
   Alert,
   ActivityIndicator,
   Platform,
@@ -36,6 +35,7 @@ try {
   console.warn('[OwnerScreen] react-native-webview not available; in-app PDF viewing disabled');
 }
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { wp, hp, useWindowSize } from '../utils/responsive';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 
 type Props = {
@@ -519,7 +519,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   );
 
   // Responsive breakpoints (reactive)
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowSize();
   const isDesktop = width >= 900;
   const isTablet = width >= 600 && width < 900;
   const isMobile = width < 600;
@@ -2454,7 +2454,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       {/* Tenant confirmation modal before creating/updating tenant and generating agreement */}
       <Modal visible={showTenantConfirm} animationType="fade" transparent>
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContent, { width: 360 }]}>
+          <View style={[styles.modalContent, { width: Math.min(360, wp(95)) }]}>
             <Text style={{ fontWeight: '700', fontSize: 16, marginBottom: 8 }}>Please confirm</Text>
             <ScrollView style={{ maxHeight: 320 }}>
               <Text style={{ fontWeight: '700' }}>{editingTenant?.name}</Text>
@@ -2499,7 +2499,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       {/* Confirmation modal for activate/deactivate */}
       <Modal visible={!!confirmAction} animationType="fade" transparent>
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContent, { width: 320 }]}>
+          <View style={[styles.modalContent, { width: Math.min(320, wp(90)) }]}> 
             <Text style={{ fontWeight: '700', fontSize: 16, marginBottom: 8 }}>Confirm action</Text>
             <Text style={{ color: '#333', marginBottom: 12 }}>
               {confirmAction
@@ -2607,7 +2607,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       {/* Profile modal for Owner (opened from top-right icon or BottomTab 'Profile') */}
       <Modal visible={showProfileModal} animationType="slide" transparent>
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContent, { maxWidth: 420 }]}>
+          <View style={[styles.modalContent, { maxWidth: Math.min(420, wp(98)) }]}>
             <Text style={{ fontWeight: '800', fontSize: 18, marginBottom: 8 }}>Profile</Text>
             <ProfileCard
               name={ownerProfile?.name || user?.name}
@@ -2881,7 +2881,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
           <View
             style={{
               width: '100%',
-              maxWidth: 820,
+              maxWidth: Math.min(820, wp(98)),
               borderRadius: 10,
               overflow: 'hidden',
               position: 'relative',
@@ -2899,24 +2899,23 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               <Ionicons name="close" size={22} color="#fff" />
             </TouchableOpacity>
 
-            {previewImageUrl ? (
+              {previewImageUrl ? (
               // show image inline when possible; non-image URLs will fallback to the "no preview" block
-              <Image
-                source={{ uri: previewImageUrl }}
-                style={{
-                  width: '100%',
-                  height: 600,
-                  resizeMode: 'contain',
-                  backgroundColor: '#000',
-                }}
-              />
+                <Image
+                  source={{ uri: previewImageUrl }}
+                  style={{
+                    width: '100%',
+                    height: hp(60),
+                    resizeMode: 'contain',
+                    backgroundColor: '#000',
+                  }}
+                />
             ) : previewTargetUrl ? (
               (() => {
                 const url = previewTargetUrl;
                 const isPdf = /^(data:application\/pdf)|.*\.(pdf)(\?.*)?$/i.test(url);
                 if (isPdf) {
                   if (Platform.OS === 'web') {
-                    // on web open in new tab (WebView not supported reliably)
                     try {
                       if (typeof window !== 'undefined') window.open(url, '_blank');
                     } catch (e) {}
@@ -2930,9 +2929,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                           justifyContent: 'center',
                         }}
                       >
-                        <Text style={{ color: '#fff', marginBottom: 12 }}>
-                          Opened PDF in a new tab.
-                        </Text>
+                        <Text style={{ color: '#fff', marginBottom: 12 }}>Opened PDF in a new tab.</Text>
                         <TouchableOpacity
                           style={[styles.smallBtn, { paddingHorizontal: 16 }]}
                           onPress={() => setShowPreviewModal(false)}
@@ -2943,7 +2940,6 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                     );
                   }
 
-                  // For native, try to show in-app via WebView. For remote PDFs, use Google Docs viewer wrapper.
                   let sourceUri = url;
                   if (/^https?:\/\//i.test(url)) {
                     sourceUri = `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(
@@ -2951,7 +2947,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                     )}`;
                   }
                   return (
-                    <View style={{ width: '100%', height: 600, backgroundColor: '#000' }}>
+                    <View style={{ width: '100%', height: hp(65), backgroundColor: '#000' }}>
                       <WebView
                         source={{ uri: sourceUri }}
                         style={{ flex: 1 }}
@@ -3126,7 +3122,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       {/* Helpline add modal */}
       <Modal visible={showHelplineModal} animationType="slide" transparent>
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContent, { width: 360 }]}>
+          <View style={[styles.modalContent, { width: Math.min(360, wp(95)) }]}> 
             <Text style={{ fontWeight: '800', fontSize: 18, marginBottom: 8 }}>Add Helpline</Text>
             <Text style={styles.label}>Name</Text>
             <TextInput
