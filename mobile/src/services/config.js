@@ -1,6 +1,6 @@
 // Shared runtime config for the mobile app network settings.
 // Update these values to match your dev machine's LAN IP and backend port.
-export const DEFAULT_HOST = '192.168.1.16';
+export const DEFAULT_HOST = '192.168.1.5';
 export const DEFAULT_PORT = 4001;
 
 // Helper to build a default base URL

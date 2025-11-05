@@ -10,8 +10,6 @@ import {
   Platform,
   Image,
   ImageBackground,
-  Animated,
-  Easing,
   ActivityIndicator,
   Dimensions,
 } from 'react-native';
@@ -19,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import api, { setToken, setAuthHeader } from '../services/api';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
+// Animations removed: use static components instead
 
 type Props = { onLogin: (user: any) => void };
 
@@ -36,46 +34,22 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
   const [snackbarType, setSnackbarType] = useState<'success' | 'error' | 'info'>('info');
   const [resendTimer, setResendTimer] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const [devOtpCode, setDevOtpCode] = useState<string | null>(null);
+  const devCodeTimer = useRef<any>(null);
 
-  const fadeAnim = useRef(new Animated.Value(0)).current; // for transition between send/verify
+  // Animations removed: keep screenWidth if needed for responsive layout
   const screenWidth = Dimensions.get('window').width;
 
   useEffect(() => {
     console.log('[LoginScreen] mounted');
   }, []);
 
-  useEffect(() => {
-    // animate when otpSent toggles
-    Animated.timing(fadeAnim, {
-      toValue: otpSent ? 1 : 0,
-      duration: 420,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
-  }, [otpSent]);
+  // animations removed: OTP visibility controlled by `otpSent` boolean
 
-  // logo entrance animation
-  const logoAnim = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.spring(logoAnim, {
-      toValue: 1,
-      friction: 6,
-      tension: 80,
-      useNativeDriver: true,
-    }).start();
-  }, []);
+  // logo animation removed — keep static logo
 
-  // phone input focus/floating label animation
-  const phoneFocusAnim = useRef(new Animated.Value(phone ? 1 : 0)).current;
+  // phone input focus animation removed; keep simple focused state for styling
   const [phoneFocused, setPhoneFocused] = useState(false);
-  useEffect(() => {
-    Animated.timing(phoneFocusAnim, {
-      toValue: phoneFocused || !!phone ? 1 : 0,
-      duration: 220,
-      useNativeDriver: true,
-      easing: Easing.out(Easing.cubic),
-    }).start();
-  }, [phoneFocused, phone]);
 
   useEffect(() => {
     let t: any;
@@ -98,6 +72,16 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
       const res = await api.post('/api/auth/otp/request', { phone }); // Send only 10-digit number
       // API may return 401 or 403 with details; handle those inline
       setOtpSent(true);
+      // If backend returns a code in non-production (helpful for dev/testing), show it briefly
+      try {
+        const code = res && res.data && res.data.code;
+        if (code) {
+          setDevOtpCode(String(code));
+          // clear any previous timer
+          if (devCodeTimer.current) clearTimeout(devCodeTimer.current);
+          devCodeTimer.current = setTimeout(() => setDevOtpCode(null), 10000);
+        }
+      } catch (e) {}
       setResendTimer(20);
       setSnackbarType('success');
       setSnackbarText('OTP sent. Check your phone.');
@@ -121,6 +105,12 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (devCodeTimer.current) clearTimeout(devCodeTimer.current);
+    };
+  }, []);
 
   const handleVerifyOtp = async () => {
     const otpCode = otp.join('');
@@ -173,12 +163,11 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
     }
   };
 
-  // Animated interpolations
-  const slideX = fadeAnim.interpolate({ inputRange: [0, 1], outputRange: [screenWidth, 0] });
+  // Animations removed
 
   return (
     <SafeAreaView style={styles.flexFill}>
-      <AnimatedLinearGradient
+      <LinearGradient
         colors={['#6D28D9', '#0ea5a0']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
@@ -186,8 +175,8 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
       />
 
       {/* Decorative blurred blobs */}
-      <Animated.View style={[styles.blob, styles.blob1]} />
-      <Animated.View style={[styles.blob, styles.blob2]} />
+      <View style={[styles.blob, styles.blob1]} />
+      <View style={[styles.blob, styles.blob2]} />
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -197,51 +186,43 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
           contentContainerStyle={styles.containerScroll}
           keyboardShouldPersistTaps="handled"
         >
-          <Animated.View
-            style={[
-              styles.card,
-              {
-                transform: [
-                  {
-                    translateX: fadeAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -40] }),
-                  },
-                ],
-              },
-            ]}
-          >
-            {/* Lightweight placeholder logo to avoid remote image delays */}
-            <Animated.View
-              style={[
-                styles.logoPlaceholder,
-                {
-                  transform: [
-                    { scale: logoAnim },
-                    {
-                      rotate: logoAnim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: ['0deg', '6deg'],
-                      }),
-                    },
-                  ],
-                },
-              ]}
-            >
-              <Text style={styles.logoInitials}>SK</Text>
-            </Animated.View>
-            <Animated.Text
-              style={[
-                styles.title,
-                { opacity: fadeAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.9] }) },
-              ]}
-            >
-              Society Karbhar
-            </Animated.Text>
+          <View style={[styles.card]}>
+            {/* App logo: prefer a bundled local asset. Place your image at
+                mobile/assets/society-karbhar-logo.png so Metro can bundle it.
+                If you don't add the file, the placeholder initials will be shown. */}
+            {/** Try to require the local asset. If you add the file at the path below
+             *  the bundler will include it and it will show instead of the initials.
+             */}
+            {/* eslint-disable-next-line @typescript-eslint/no-var-requires */}
+            {
+              // note: ensure file exists at '../../assets/society-karbhar-logo.png'
+              // path relative to this file (mobile/src/screens/...)
+              (() => {
+                try {
+                  const logoImg = require('../../assets/society-karbhar-logo.png');
+                  return <Image source={logoImg} style={styles.logo} />;
+                } catch (e) {
+                  return (
+                    <View style={styles.logoPlaceholder}>
+                      <Text style={styles.logoInitials}>SK</Text>
+                    </View>
+                  );
+                }
+              })()
+            }
+            <Text style={styles.title}>Society Karbhar</Text>
 
             {/* Phone input / Send OTP panel */}
-            <Animated.View
+            <View
               style={[
                 styles.panel,
-                { opacity: fadeAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) },
+                // center phone panel like the OTP panel so inputs (flag +91 + textbox) are centered
+                {
+                  opacity: otpSent ? 0 : 1,
+                  width: '90%',
+                  alignSelf: 'center',
+                  alignItems: 'center',
+                },
               ]}
               pointerEvents={otpSent ? 'none' : 'auto'}
             >
@@ -249,12 +230,16 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
                 {/* <Animated.Text style={[styles.floatingLabel, { transform: [{ translateY: phoneFocusAnim.interpolate({ inputRange:[0,1], outputRange: [0,-18] }) }, { scale: phoneFocusAnim.interpolate({ inputRange:[0,1], outputRange: [1,0.85] }) }], opacity: phoneFocusAnim } ]}>Mobile Number</Animated.Text> */}
                 <View style={styles.phoneRow}>
                   <View style={styles.countryCodeSmall}>
-                    <Image
-                      source={{
-                        uri: 'https://upload.wikimedia.org/wikipedia/en/4/41/Flag_of_India.svg',
-                      }}
-                      style={styles.flagSmall}
-                    />
+                    {/* Prefer a local bundled PNG at mobile/assets/flags/in.png. If missing, fall back to an emoji so the UI always shows a flag. */}
+                    {/* eslint-disable-next-line @typescript-eslint/no-var-requires */}
+                    {(() => {
+                      try {
+                        const local = require('../../assets/flags/in.png');
+                        return <Image source={local} style={styles.flagSmall} />;
+                      } catch (e) {
+                        return <Text style={styles.flagEmoji}>🇮🇳</Text>;
+                      }
+                    })()}
                     <Text style={styles.countryTextSmall}>+91</Text>
                   </View>
                   <TextInput
@@ -298,16 +283,28 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
                   )}
                 </LinearGradient>
               </TouchableOpacity>
-            </Animated.View>
+            </View>
 
             {/* OTP panel */}
-            <Animated.View
+            <View
               style={[
                 styles.panel,
-                { transform: [{ translateX: slideX }], opacity: fadeAnim, marginTop: 18 },
+                // fade in place: show/hide based on otpSent
+                {
+                  opacity: otpSent ? 1 : 0,
+                  width: '90%',
+                  alignSelf: 'center',
+                  alignItems: 'center',
+                },
               ]}
               pointerEvents={otpSent ? 'auto' : 'none'}
             >
+              {/* Dev-only: show OTP code returned by backend for 10s to ease testing */}
+              {devOtpCode && (
+                <View style={styles.devOtpBox}>
+                  <Text style={styles.devOtpText}>Dev OTP: {devOtpCode}</Text>
+                </View>
+              )}
               <Text style={styles.otpTitle}>Enter the 6-digit code</Text>
               <View style={styles.otpContainerModern}>
                 {otp.map((digit, index) => {
@@ -315,7 +312,9 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
                   return (
                     <TextInput
                       key={index}
-                      ref={(ref) => (inputRefs.current[index] = ref!)}
+                      ref={(ref) => {
+                        inputRefs.current[index] = ref!;
+                      }}
                       style={[styles.otpInputModern, isFocused ? styles.otpInputFocused : {}]}
                       keyboardType="number-pad"
                       maxLength={1}
@@ -362,20 +361,20 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
                   </Text>
                 </TouchableOpacity>
               </View>
-            </Animated.View>
+            </View>
 
             {/* Snackbar */}
             {snackbarVisible && (
-              <Animated.View
+              <View
                 style={[
                   styles.snackbar,
                   snackbarType === 'error' ? styles.snackbarError : styles.snackbarSuccess,
                 ]}
               >
                 <Text style={styles.snackbarText}>{snackbarText}</Text>
-              </Animated.View>
+              </View>
             )}
-          </Animated.View>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -474,7 +473,7 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   floatingLabelSmall: { top: -10, fontSize: 12, color: '#0f172a' },
-  phoneRow: { flexDirection: 'row', alignItems: 'center' },
+  phoneRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
   countryCodeSmall: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -486,6 +485,7 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   flagSmall: { width: 20, height: 14, marginRight: 6 },
+  flagEmoji: { fontSize: 18, marginRight: 6 },
   countryTextSmall: { fontSize: 14, fontWeight: '600' },
   inputModern: {
     flex: 1,
@@ -525,8 +525,10 @@ const styles = StyleSheet.create({
   },
   otpContainerModern: {
     flexDirection: 'row',
-    justifyContent: 'space-evenly',
+    // center the OTP inputs horizontally and give some horizontal padding so they're visually centered
+    justifyContent: 'center',
     paddingHorizontal: 12,
+    width: '100%',
   },
   otpInputModern: {
     width: Platform.OS === 'ios' ? 48 : 42,
@@ -559,4 +561,12 @@ const styles = StyleSheet.create({
   snackbarText: { color: '#fff', fontWeight: '600' },
   snackbarError: { backgroundColor: '#ef4444' },
   snackbarSuccess: { backgroundColor: '#10b981' },
+  devOtpBox: {
+    backgroundColor: 'rgba(15,23,42,0.06)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  devOtpText: { color: '#0f172a', fontWeight: '700' },
 });

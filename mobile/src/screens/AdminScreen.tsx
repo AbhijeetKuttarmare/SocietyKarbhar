@@ -29,6 +29,7 @@ import ProfileCard from '../components/ProfileCard';
 import pickAndUploadProfile, {
   pickAndUploadFile as sharedPickAndUploadFile,
 } from '../services/uploadProfile';
+import AdminProfile from './AdminProfile';
 
 // Responsive Admin Screen
 // - Preserves all API calls / logic from your original file
@@ -71,9 +72,9 @@ export default function AdminScreen({ user, onLogout }: Props) {
   const [helplines, setHelplines] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [societies, setSocieties] = useState<any[]>([]);
-  const [tab, setTab] = useState<'dashboard' | 'helplines' | 'users' | 'notices' | 'maintenance'>(
-    'dashboard'
-  );
+  const [tab, setTab] = useState<
+    'dashboard' | 'helplines' | 'users' | 'notices' | 'maintenance' | 'profile'
+  >('dashboard');
   const [tab2, setTab2] = useState<'wings' | 'logs'>('wings');
   const [q, setQ] = useState('');
   const [showHelplineModal, setShowHelplineModal] = useState(false);
@@ -107,13 +108,27 @@ export default function AdminScreen({ user, onLogout }: Props) {
     buildingId: '',
   });
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
-  const [showProfileModal, setShowProfileModal] = useState(false);
+  // profile is now a tab (renders full page) instead of a modal
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
     (user as any)?.avatar || (user as any)?.image
   );
   const [showUserDetail, setShowUserDetail] = useState(false);
   const [detailUser, setDetailUser] = useState<any>(null);
   const [buildings, setBuildings] = useState<any[]>([]);
+  // de-duplicate buildings client-side to avoid duplicate-key issues when backend returns
+  // repeated entries. Keep original order and filter by unique id.
+  const uniqueBuildings = React.useMemo(() => {
+    const seen = new Set<string | number>();
+    const out: any[] = [];
+    for (const b of buildings || []) {
+      const id = b && (b.id ?? b._id ?? b.name);
+      if (!id) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(b);
+    }
+    return out;
+  }, [buildings]);
   const [selectedWingId, setSelectedWingId] = useState<string | null>(null);
   const [wingAnalytics, setWingAnalytics] = useState({ flats: 0, owners: 0, tenants: 0 });
   const [loadingWingAnalytics, setLoadingWingAnalytics] = useState(false);
@@ -290,7 +305,29 @@ export default function AdminScreen({ user, onLogout }: Props) {
   async function fetchUsers() {
     try {
       const res = await api.get('/api/admin/users');
-      setUsers(res.data.wings || []); // Now expecting wings array with nested flats and users
+      // Deduplicate nested users per flat to avoid repeated tenant entries
+      const wingsRaw = res.data.wings || [];
+      const wings = (wingsRaw || []).map((w: any) => {
+        const nw = { ...w };
+        if (Array.isArray(nw.flats)) {
+          nw.flats = nw.flats.map((f: any) => {
+            const nf = { ...f };
+            if (Array.isArray(nf.users)) {
+              const seen = new Map();
+              for (const u of nf.users) {
+                const key =
+                  u && (u.id || u.phone || (u.name && u.name.trim()) || JSON.stringify(u));
+                if (!key) continue;
+                if (!seen.has(key)) seen.set(key, u);
+              }
+              nf.users = Array.from(seen.values());
+            }
+            return nf;
+          });
+        }
+        return nw;
+      });
+      setUsers(wings);
     } catch (e) {
       console.warn(e);
     }
@@ -533,6 +570,45 @@ export default function AdminScreen({ user, onLogout }: Props) {
     }
   };
 
+  // Open or download agreement PDF/URL. Keep simple: open the URL using Linking.
+  const openOrDownloadAgreement = async (url?: string) => {
+    if (!url) return alert('No agreement URL available');
+    try {
+      // Prefer to open the URL in external browser / handler which will allow download
+      await Linking.openURL(url);
+    } catch (e) {
+      console.warn('open agreement failed', e);
+      alert('Failed to open agreement');
+    }
+  };
+
+  // Pick the latest agreement from detailUser.history.agreements (by updated/created timestamp)
+  const latestAgreement = React.useMemo(() => {
+    const ags = (detailUser && detailUser.history && detailUser.history.agreements) || [];
+    if (!Array.isArray(ags) || ags.length === 0) return null;
+    const ts = (a: any) => {
+      const d =
+        a && (a.updatedAt || a.updated_at || a.createdAt || a.created_at || a.created)
+          ? new Date(
+              a.updatedAt || a.updated_at || a.createdAt || a.created_at || a.created
+            ).getTime()
+          : 0;
+      return isNaN(d) ? 0 : d;
+    };
+    return ags.slice().sort((a: any, b: any) => ts(b) - ts(a))[0] || null;
+  }, [detailUser]);
+
+  // Normalize agreement URLs into a set to avoid showing agreements twice (as documents)
+  const agreementUrls = React.useMemo(() => {
+    const ags = (detailUser && detailUser.history && detailUser.history.agreements) || [];
+    const set = new Set<string>();
+    for (const a of ags || []) {
+      const url = a && (a.file_url || a.fileUrl || a.url || a.path || a.path_url || '');
+      if (url) set.add(String(url));
+    }
+    return set;
+  }, [detailUser]);
+
   async function createBuilding() {
     try {
       await api.post('/api/admin/buildings', { name: 'New Wing', address: '' });
@@ -731,15 +807,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
       else if (k === 'bills' || k === 'maintenance') setTab('maintenance');
       else if (k === 'users') setTab('users');
       else if (k === 'notices') setTab('notices');
-    } catch (e) {}
-  }, [bottomTab.activeKey]);
-
-  // open profile modal when bottom tab 'profile' is pressed
-  React.useEffect(() => {
-    try {
-      const k = bottomTab.activeKey;
-      if (k === 'profile') setShowProfileModal(true);
-      else setShowProfileModal(false);
+      else if (k === 'profile') setTab('profile');
     } catch (e) {}
   }, [bottomTab.activeKey]);
 
@@ -752,6 +820,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
         maintenance: 'bills',
         users: 'users',
         notices: 'notices',
+        profile: 'profile',
       };
       const k = map[tab] || 'home';
       if (bottomTab.activeKey !== k) bottomTab.setActiveKey(k);
@@ -910,88 +979,97 @@ export default function AdminScreen({ user, onLogout }: Props) {
             </View>
           )}
 
-          {/* Wing Analytics (moved here so it appears below the header) */}
-          <View style={{ marginTop: 12, paddingHorizontal: isMobile ? 6 : 0 }}>
-            <Text style={styles.sectionTitle}>Wing Analytics</Text>
-            <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {buildings.map((b) => (
-                  <TouchableOpacity
-                    key={b.id}
-                    onPress={() => setSelectedWingId(b.id)}
-                    style={[
-                      styles.buildingChip,
-                      selectedWingId === b.id ? styles.buildingChipActive : {},
-                    ]}
-                  >
-                    <Text>{b.name}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-            <View style={{ backgroundColor: '#fff', padding: 12, borderRadius: 10, elevation: 1 }}>
-              <Text style={{ fontWeight: '700', marginBottom: 8 }}>
-                {selectedWingId
-                  ? `Wing: ${(buildings.find((x) => x.id === selectedWingId) || {}).name || ''}`
-                  : 'Select Wing'}
-              </Text>
-              {loadingWingAnalytics ? (
-                <ActivityIndicator />
-              ) : (
-                <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 160 }}>
-                  {[
-                    { key: 'Flats', value: wingAnalytics.flats, color: '#4f46e5' },
-                    { key: 'Owners', value: wingAnalytics.owners, color: '#10b981' },
-                    { key: 'Tenants', value: wingAnalytics.tenants, color: '#f59e0b' },
-                  ].map((b, i) => (
-                    <View key={b.key} style={{ flex: 1, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 12, color: '#374151', marginBottom: 6 }}>
-                        {b.value}
-                      </Text>
-                      <TouchableOpacity
-                        activeOpacity={0.85}
-                        onPress={() => {
-                          try {
-                            (require('react-native').Alert as any).alert(b.key, String(b.value));
-                          } catch (e) {}
-                        }}
-                        style={{
-                          width: 44,
-                          height: 120,
-                          justifyContent: 'flex-end',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <View
+          {/* Wing Analytics - show only on the Dashboard tab */}
+          {tab === 'dashboard' && (
+            <View style={{ marginTop: 12, paddingHorizontal: isMobile ? 6 : 0 }}>
+              <Text style={styles.sectionTitle}>Wing Analytics</Text>
+              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {uniqueBuildings.map((b, i) => (
+                    <TouchableOpacity
+                      key={`wing-${b.id}-${i}`}
+                      onPress={() => setSelectedWingId(b.id)}
+                      style={[
+                        styles.buildingChip,
+                        selectedWingId === b.id ? styles.buildingChipActive : {},
+                      ]}
+                    >
+                      <Text>{b.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+              <View
+                style={{ backgroundColor: '#fff', padding: 12, borderRadius: 10, elevation: 1 }}
+              >
+                <Text style={{ fontWeight: '700', marginBottom: 8 }}>
+                  {selectedWingId
+                    ? `Wing: ${(buildings.find((x) => x.id === selectedWingId) || {}).name || ''}`
+                    : 'Select Wing'}
+                </Text>
+                {loadingWingAnalytics ? (
+                  <ActivityIndicator />
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 160 }}>
+                    {[
+                      { key: 'Flats', value: wingAnalytics.flats, color: '#4f46e5' },
+                      { key: 'Owners', value: wingAnalytics.owners, color: '#10b981' },
+                      { key: 'Tenants', value: wingAnalytics.tenants, color: '#f59e0b' },
+                    ].map((b, i) => (
+                      <View key={b.key} style={{ flex: 1, alignItems: 'center' }}>
+                        <Text style={{ fontSize: 12, color: '#374151', marginBottom: 6 }}>
+                          {b.value}
+                        </Text>
+                        <TouchableOpacity
+                          activeOpacity={0.85}
+                          onPress={() => {
+                            try {
+                              (require('react-native').Alert as any).alert(b.key, String(b.value));
+                            } catch (e) {}
+                          }}
                           style={{
-                            width: 30,
+                            width: 44,
                             height: 120,
-                            backgroundColor: '#f3f4f6',
-                            borderRadius: 6,
-                            alignItems: 'center',
                             justifyContent: 'flex-end',
-                            overflow: 'hidden',
+                            alignItems: 'center',
                           }}
                         >
-                          <Animated.View
-                            style={[
-                              { width: '100%', backgroundColor: b.color },
-                              { height: animatedWingHeightsRef[i] },
-                            ]}
-                          />
-                        </View>
-                      </TouchableOpacity>
-                      <Text style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>{b.key}</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
+                          <View
+                            style={{
+                              width: 30,
+                              height: 120,
+                              backgroundColor: '#f3f4f6',
+                              borderRadius: 6,
+                              alignItems: 'center',
+                              justifyContent: 'flex-end',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <Animated.View
+                              style={[
+                                { width: '100%', backgroundColor: b.color },
+                                { height: animatedWingHeightsRef[i] },
+                              ]}
+                            />
+                          </View>
+                        </TouchableOpacity>
+                        <Text style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
+                          {b.key}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
             </View>
-          </View>
+          )}
 
           <View style={{ flex: 1, paddingBottom: 48 }}>
             {tab === 'dashboard' && (
-              <View style={{ paddingVertical: 8, paddingBottom: 96 }}>
+              <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={{ paddingVertical: 8, paddingBottom: 96 }}
+              >
                 {lastApiError ? (
                   <View style={styles.errorBox}>
                     <Text style={styles.errorText}>API Error: {lastApiError}</Text>
@@ -1062,7 +1140,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
                     </TouchableOpacity>
                   </View>
                 </View>
-              </View>
+              </ScrollView>
             )}
 
             {tab === 'helplines' && (
@@ -1159,15 +1237,47 @@ export default function AdminScreen({ user, onLogout }: Props) {
                     },
                   ]}
                 >
-                  <View style={{ flex: 1, marginRight: isMobile ? 0 : 8 }}>
+                  {/* Ensure the search row fills width on mobile so input + button are not squeezed */}
+                  <View
+                    style={{
+                      width: isMobile ? '100%' : undefined,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                    }}
+                  >
                     <TextInput
                       placeholder="Search name or phone"
                       value={q}
                       onChangeText={setQ}
-                      style={styles.search}
+                      style={[styles.search, { marginRight: 8 }]}
+                      returnKeyType="search"
+                      onSubmitEditing={searchUsers}
                     />
+                    <TouchableOpacity style={styles.searchBtn} onPress={searchUsers}>
+                      <Text style={styles.searchBtnText}>Search</Text>
+                    </TouchableOpacity>
                   </View>
-                  <Button title="Search" onPress={searchUsers} />
+                </View>
+                {/* Filters: wings / flats selector - ensure it sits below the search controls and wraps on small screens */}
+                <View style={{ marginTop: 8, paddingHorizontal: isMobile ? 6 : 0 }}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ alignItems: 'center', paddingVertical: 6 }}
+                  >
+                    {uniqueBuildings.map((b, i) => (
+                      <TouchableOpacity
+                        key={`filter-${b.id}-${i}`}
+                        onPress={() => setSelectedWingId(b.id)}
+                        style={[
+                          styles.buildingChip,
+                          selectedWingId === b.id ? styles.buildingChipActive : {},
+                        ]}
+                      >
+                        <Text>{b.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
                 </View>
                 {/* this has been moved to assign flow only */}
                 {/* <View
@@ -1178,6 +1288,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
                 <FlatList
                   data={users}
                   keyExtractor={(w: any) => w.id}
+                  contentContainerStyle={{ paddingBottom: 96, paddingTop: 8 }}
                   renderItem={({ item: wing }) => {
                     const isOpen = !!expandedWings[wing.id];
                     return (
@@ -1213,37 +1324,87 @@ export default function AdminScreen({ user, onLogout }: Props) {
                               </View>
 
                               <View style={styles.flatUsers}>
-                                {flat.users?.map((user: any) => (
-                                  <View key={user.id} style={styles.userItemContainer}>
-                                    <TouchableOpacity
-                                      style={styles.userItem}
-                                      onPress={() => openUserDetail(user)}
+                                {(flat.users || []).map((user: any, ui: number) => {
+                                  const avatarUri =
+                                    user?.avatar ||
+                                    user?.image ||
+                                    user?.photo ||
+                                    user?.profile_pic ||
+                                    user?.image_url ||
+                                    null;
+                                  const isActiveUser = Boolean(
+                                    user?.active ||
+                                      user?.is_active ||
+                                      user?.status === 'active' ||
+                                      (user?.agreements && user.agreements.length > 0)
+                                  );
+                                  const initials = (user?.name || user?.phone || '')
+                                    .split(' ')
+                                    .map((p: string) => p[0])
+                                    .join('')
+                                    .slice(0, 2)
+                                    .toUpperCase();
+                                  return (
+                                    <View
+                                      key={`${user.id || user.phone || 'u'}-${ui}`}
+                                      style={styles.userItemContainer}
                                     >
-                                      <View style={styles.userIcon}>
+                                      <TouchableOpacity
+                                        style={styles.userItem}
+                                        onPress={() => openUserDetail(user)}
+                                      >
+                                        <View style={styles.userAvatarWrap}>
+                                          {avatarUri ? (
+                                            <Image
+                                              source={{ uri: avatarUri }}
+                                              style={styles.userAvatar}
+                                            />
+                                          ) : (
+                                            <View
+                                              style={[styles.userAvatar, styles.userAvatarFallback]}
+                                            >
+                                              <Text style={{ color: '#374151', fontWeight: '700' }}>
+                                                {initials}
+                                              </Text>
+                                            </View>
+                                          )}
+                                          {isActiveUser ? <View style={styles.activeDot} /> : null}
+                                        </View>
+
+                                        <View style={styles.userInfo}>
+                                          <Text style={styles.userName}>
+                                            {user.name || user.phone}
+                                          </Text>
+                                          <Text style={styles.userRole}>
+                                            {user.role} • {user.phone}
+                                          </Text>
+                                        </View>
                                         <Ionicons
-                                          name={user.role === 'owner' ? 'person' : 'people'}
-                                          size={16}
-                                          color="#4B5563"
+                                          name="chevron-forward"
+                                          size={18}
+                                          color="#9CA3AF"
                                         />
-                                      </View>
-                                      <View style={styles.userInfo}>
-                                        <Text style={styles.userName}>
-                                          {user.name || user.phone}
-                                        </Text>
-                                        <Text style={styles.userRole}>
-                                          {user.role} • {user.phone}
-                                        </Text>
-                                      </View>
-                                      <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
-                                    </TouchableOpacity>
-                                  </View>
-                                ))}
+                                      </TouchableOpacity>
+                                    </View>
+                                  );
+                                })}
                               </View>
                             </View>
                           ))}
                       </View>
                     );
                   }}
+                />
+              </View>
+            )}
+
+            {tab === 'profile' && (
+              <View style={{ paddingVertical: 8 }}>
+                <AdminProfile
+                  user={user}
+                  onLogout={onLogout}
+                  userAvatar={userAvatar}
+                  setUserAvatar={setUserAvatar}
                 />
               </View>
             )}
@@ -1563,9 +1724,9 @@ export default function AdminScreen({ user, onLogout }: Props) {
               >
                 <Text>All wings</Text>
               </TouchableOpacity>
-              {buildings.map((b) => (
+              {uniqueBuildings.map((b, i) => (
                 <TouchableOpacity
-                  key={b.id}
+                  key={`notice-${b.id}-${i}`}
                   onPress={() => {
                     if (newNotice.targetAll) return; // ignore when all selected
                     const exists = (newNotice.buildingIds || []).includes(b.id);
@@ -1752,55 +1913,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
           </View>
         </View>
       </Modal>
-      {/* Profile modal for Admin (opened from BottomTab 'Profile') */}
-      <Modal visible={showProfileModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContent, { maxWidth: 420 }]}>
-            <Text style={{ fontWeight: '800', fontSize: 18, marginBottom: 8 }}>Profile</Text>
-            <ProfileCard
-              name={user?.name}
-              phone={user?.phone || user?.mobile_number}
-              email={user?.email}
-              address={user?.address}
-              imageUri={userAvatar || user?.avatar || user?.image}
-              onEdit={async () => {
-                try {
-                  const url = await pickAndUploadProfile();
-                  if (!url) return; // cancelled
-                  await api.put('/api/user', { avatar: url });
-                  setUserAvatar(url);
-                  alert('Profile photo updated');
-                } catch (e) {
-                  console.warn('admin profile upload failed', e);
-                  alert('Upload failed');
-                }
-              }}
-              onCall={(p) => {
-                try {
-                  (require('react-native').Linking as any).openURL(`tel:${p}`);
-                } catch (e) {}
-              }}
-            />
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-              <TouchableOpacity
-                style={[styles.smallBtnClose, { marginRight: 8 }]}
-                onPress={() => setShowProfileModal(false)}
-              >
-                <Text style={styles.closeText}>Close</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.smallBtn}
-                onPress={() => {
-                  setShowProfileModal(false);
-                  onLogout();
-                }}
-              >
-                <Text style={styles.smallBtnTextWhite}>Logout</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Profile page is now a full screen tab rendered when tab === 'profile' */}
 
       {/* Assign Owner/Tenant multi-step modal */}
       <Modal visible={showAssignModal} animationType="slide" transparent>
@@ -1811,9 +1924,9 @@ export default function AdminScreen({ user, onLogout }: Props) {
               <>
                 <Text style={styles.label}>Select Wing</Text>
                 <FlatList
-                  data={buildings}
+                  data={uniqueBuildings}
                   horizontal
-                  keyExtractor={(b: any) => b.id}
+                  keyExtractor={(b: any, idx: number) => `${b.id || idx}-${idx}`}
                   renderItem={({ item }) => (
                     <TouchableOpacity
                       onPress={() => setAssignState((s) => ({ ...s, wingId: item.id }))}
@@ -1991,6 +2104,36 @@ export default function AdminScreen({ user, onLogout }: Props) {
               <Text style={styles.modalTitle}>{detailUser?.user?.name || 'User'}</Text>
               <Text style={styles.label}>Phone: {detailUser?.user?.phone}</Text>
 
+              {/* Rent Agreement - show only the latest agreement (no raw URL) */}
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: 6,
+                }}
+              >
+                <Text style={[styles.label, { marginBottom: 0 }]}>Rent Agreement</Text>
+                {latestAgreement ? (
+                  <TouchableOpacity
+                    style={[styles.actionBtnOutline, { minWidth: 96 }]}
+                    onPress={() =>
+                      openOrDownloadAgreement(
+                        latestAgreement.file_url ||
+                          latestAgreement.fileUrl ||
+                          latestAgreement.url ||
+                          latestAgreement.path
+                      )
+                    }
+                  >
+                    <Ionicons name="eye-outline" size={18} color="#374151" />
+                    <Text style={[styles.actionBtnOutlineText, { marginLeft: 8 }]}>Open</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View />
+                )}
+              </View>
+
               {/* <Text style={[styles.sectionTitle, { marginTop: 8 }]}>Documents</Text> */}
               <FlatList
                 data={detailUser?.documents || []}
@@ -1999,15 +2142,38 @@ export default function AdminScreen({ user, onLogout }: Props) {
                   // Skip rendering Aadhaar/PAN entries here — we show dedicated View buttons below
                   if (
                     item.file_url === aadhaarDoc?.file_url ||
-                    item.file_url === panDoc?.file_url
+                    item.file_url === panDoc?.file_url ||
+                    (item.file_url && agreementUrls.has(item.file_url))
                   ) {
                     return null;
                   }
 
                   return (
-                    <View style={{ padding: 8 }}>
-                      <Text style={styles.listTitle}>{item.title || item.file_type}</Text>
-                      {item.file_url ? <Text style={styles.listSub}>{item.file_url}</Text> : null}
+                    <View
+                      style={{
+                        padding: 8,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.listTitle}>{item.title || item.file_type}</Text>
+                        {item.description ? (
+                          <Text style={styles.listSub} numberOfLines={2}>
+                            {item.description}
+                          </Text>
+                        ) : null}
+                      </View>
+                      {item.file_url ? (
+                        <TouchableOpacity
+                          style={[styles.actionBtnOutline, { marginLeft: 12 }]}
+                          onPress={() => viewDocument(item.file_url)}
+                        >
+                          <Ionicons name="eye-outline" size={16} color="#374151" />
+                          <Text style={[styles.actionBtnOutlineText, { marginLeft: 8 }]}>Open</Text>
+                        </TouchableOpacity>
+                      ) : null}
                     </View>
                   );
                 }}
@@ -2060,13 +2226,17 @@ export default function AdminScreen({ user, onLogout }: Props) {
                 </View>
 
                 {/* Dedicated view buttons for Aadhaar / PAN (show when respective docs exist) */}
-                <View style={{ marginTop: 8, flexDirection: 'row', gap: 12 }}>
+                <View
+                  style={{
+                    marginTop: 8,
+                    flexDirection: 'row',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                  }}
+                >
                   {aadhaarDoc ? (
                     <TouchableOpacity
-                      style={[
-                        styles.actionBtnOutline,
-                        { flexDirection: 'row', alignItems: 'center' },
-                      ]}
+                      style={[styles.actionBtnOutline, styles.docViewBtn]}
                       onPress={() => viewDocument(aadhaarDoc.file_url)}
                     >
                       <Ionicons name="eye-outline" size={18} color="#374151" />
@@ -2078,10 +2248,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
 
                   {panDoc ? (
                     <TouchableOpacity
-                      style={[
-                        styles.actionBtnOutline,
-                        { flexDirection: 'row', alignItems: 'center' },
-                      ]}
+                      style={[styles.actionBtnOutline, styles.docViewBtn]}
                       onPress={() => viewDocument(panDoc.file_url)}
                     >
                       <Ionicons name="eye-outline" size={18} color="#374151" />
@@ -2090,6 +2257,8 @@ export default function AdminScreen({ user, onLogout }: Props) {
                       </Text>
                     </TouchableOpacity>
                   ) : null}
+
+                  {/* Agreements are shown in the Rent Agreement section above (only latest is exposed). */}
                 </View>
               </View>
 
@@ -2100,16 +2269,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
                 </View>
               )}
 
-              <FlatList
-                data={detailUser?.history?.agreements || []}
-                keyExtractor={(a: any) => a.id}
-                renderItem={({ item }) => (
-                  <View style={{ padding: 6 }}>
-                    <Text>Agreement {item.id}</Text>
-                    <Text style={styles.listSub}>{item.file_url}</Text>
-                  </View>
-                )}
-              />
+              {/* Agreements are surfaced as View/Download buttons above. Raw URLs are hidden. */}
 
               <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
                 <Button
@@ -2203,9 +2363,9 @@ export default function AdminScreen({ user, onLogout }: Props) {
             <Text style={styles.modalTitle}>Add Flat</Text>
             <Text style={styles.label}>Wing</Text>
             <FlatList
-              data={buildings}
+              data={uniqueBuildings}
               horizontal
-              keyExtractor={(b: any) => b.id}
+              keyExtractor={(b: any, idx: number) => `${b.id || idx}-${idx}`}
               renderItem={({ item }) => (
                 <TouchableOpacity
                   onPress={() => setNewFlat((s) => ({ ...s, buildingId: item.id }))}
@@ -2351,6 +2511,35 @@ const styles: any = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  userAvatarWrap: {
+    width: 36,
+    height: 36,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    resizeMode: 'cover',
+    backgroundColor: '#E5E7EB',
+  },
+  userAvatarFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activeDot: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#10B981',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
   userInfo: {
     flex: 1,
     marginLeft: 12,
@@ -2448,6 +2637,16 @@ const styles: any = StyleSheet.create({
     elevation: 2,
   },
   searchInput: { marginLeft: 8, minWidth: 120 },
+  searchBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: palette.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 80,
+  },
+  searchBtnText: { color: '#fff', fontWeight: '700' },
   iconBtn: { padding: 8, marginLeft: 6, backgroundColor: '#fff', borderRadius: 8, elevation: 2 },
   headerBadge: {
     position: 'absolute',
@@ -2586,6 +2785,16 @@ const styles: any = StyleSheet.create({
   pillActive: { backgroundColor: '#eef2ff' },
   buildingChip: { padding: 8, marginRight: 8, borderRadius: 8, backgroundColor: '#fff' },
   buildingChipActive: { backgroundColor: '#eef2ff' },
+
+  // document view buttons inside user detail modal
+  docViewBtn: {
+    marginRight: 8,
+    marginBottom: 8,
+    minWidth: 120,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   errorBox: { backgroundColor: '#fff6f6', padding: 8, borderRadius: 8 },
   errorText: { color: palette.danger },

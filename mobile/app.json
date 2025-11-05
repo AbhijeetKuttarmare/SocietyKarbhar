@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "society-karbhar-mobile",
+    "slug": "society-karbhar-mobile",
+    "version": "0.1.0",
+    "icon": "./assets/society-karbhar-logo.png",
+    "orientation": "portrait",
+    "scheme": "societykarbhar",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/society-karbhar-logo.png",
+        "backgroundColor": "#6D28D9"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/society-karbhar-logo.png"
+    },
+    "splash": {
+      "image": "./assets/society-karbhar-logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#6D28D9"
+    },
+    "extra": {
+      "API_BASE_URL": "http://192.168.1.5:4001"
+    }
+  }
+}

@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View, Text } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { useFonts } from 'expo-font';
+import * as Font from 'expo-font';
+import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api, { setAuthHeader, setToken } from './src/services/api';
 import LoginScreen from './src/screens/LoginScreen';
@@ -116,6 +119,11 @@ function BottomTabWrapper({ user }: { user: any }) {
   } else {
     items.push({ key: 'home', label: 'Home', icon: 'home' });
     items.push({ key: 'helplines', label: 'Helplines', icon: 'call' });
+    // Admin users get a dedicated 'Users' tab
+    if (user && user.role === 'admin') {
+      items.push({ key: 'users', label: 'Users', icon: 'people' });
+    }
+    // Tenant-specific tab
     if (user && user.role === 'tenant') {
       items.push({ key: 'tenants', label: 'My Owner', icon: 'people' });
     }
@@ -128,4 +136,14 @@ function BottomTabWrapper({ user }: { user: any }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
+  debugHeader: {
+    padding: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  debugText: { fontSize: 12, color: '#333' },
+  debugIcons: { flexDirection: 'row', gap: 12 },
 });
