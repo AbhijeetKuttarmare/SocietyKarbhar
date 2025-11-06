@@ -59,9 +59,18 @@ router.put('/', authenticate, async (req, res) => {
       payload.phone = req.body.mobile_number;
     }
 
+    console.log('[user] update requested', { userId, payloadKeys: Object.keys(payload) });
     const u = await models.User.findByPk(userId);
-    if (!u) return res.status(404).json({ error: 'user not found' });
-    await u.update(payload);
+    if (!u) {
+      console.warn('[user] update: user not found', userId);
+      return res.status(404).json({ error: 'user not found' });
+    }
+    try {
+      await u.update(payload);
+    } catch (dbErr) {
+      console.error('[user] update failed to save to DB', dbErr && dbErr.message, dbErr && dbErr.stack);
+      return res.status(500).json({ error: 'failed_to_update_user', detail: dbErr && dbErr.message });
+    }
 
     // return an enriched user (same shape as GET /me) so clients get the up-to-date representation
     const fresh = await models.User.findByPk(userId, {
@@ -72,7 +81,7 @@ router.put('/', authenticate, async (req, res) => {
     return res.json({ user: out });
   } catch (err) {
     console.error('[user] update error', err && (err.stack || err));
-    return res.status(500).json({ error: 'internal server error' });
+    return res.status(500).json({ error: 'internal server error', detail: err && err.message });
   }
 });
 

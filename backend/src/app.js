@@ -38,6 +38,11 @@ app.get('/', (req, res) => res.json({ ok: true, message: 'Society Karbhar API' }
 // routers
 const authRouter = require('./routes/auth');
 app.use('/api/auth', authRouter);
+// debug router (unauthenticated) to help test multipart uploads
+try {
+  const debugRouter = require('./routes/debug');
+  app.use('/api/debug', debugRouter);
+} catch (e) {}
 const superadminRouter = require('./routes/superadmin');
 app.use('/api/superadmin', superadminRouter);
 const adminRouter = require('./routes/admin');

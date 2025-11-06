@@ -89,7 +89,7 @@ export default function App() {
               const role = user?.role;
               if (role === 'superadmin')
                 return <SuperadminScreen user={user} onLogout={handleLogout} />;
-              if (role === 'admin') return <AdminScreen user={user} onLogout={handleLogout} />;
+              if (role === 'admin') return <AdminScreen user={user} onLogout={handleLogout} setUser={setUser} />;
               if (role === 'owner') return <OwnerScreen user={user} onLogout={handleLogout} />;
               if (role === 'tenant') return <TenantScreen user={user} onLogout={handleLogout} />;
               return <TenantScreen user={user} onLogout={handleLogout} />;

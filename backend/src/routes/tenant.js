@@ -7,6 +7,16 @@ const cloudinary = require('cloudinary').v2;
 // multer for multipart/form-data uploads (memory storage)
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
+// streamifier is optional but recommended (used to stream buffers to Cloudinary)
+let streamifier;
+try {
+  streamifier = require('streamifier');
+} catch (err) {
+  console.warn(
+    '[tenant] streamifier not installed; install with `npm i streamifier` to enable safe streaming uploads to Cloudinary'
+  );
+  streamifier = null;
+}
 
 // cloudinary is configured centrally in app.js if env vars present
 try {
@@ -14,6 +24,49 @@ try {
     cloudinary.config({ secure: true });
   }
 } catch (e) {}
+
+// Helper: upload a data URL or buffer to Cloudinary using upload_stream when needed.
+// This avoids cases where the Cloudinary client may try to open long/invalid paths
+// (on Windows this can surface as ENAMETOOLONG when a data URL is treated as a path).
+async function cloudinaryUploadDataUrl(dataUrlOrBuffer, opts = {}) {
+  // if cloudinary isn't configured, surface an error so callers can fallback
+  if (
+    !process.env.CLOUDINARY_CLOUD_NAME ||
+    !process.env.CLOUDINARY_API_KEY ||
+    !process.env.CLOUDINARY_API_SECRET
+  ) {
+    throw new Error('cloudinary_not_configured');
+  }
+
+  // If caller passed a Buffer, stream it directly
+  if (Buffer.isBuffer(dataUrlOrBuffer)) {
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(opts, (err, result) => {
+        if (err) return reject(err);
+        resolve(result);
+      });
+      streamifier.createReadStream(dataUrlOrBuffer).pipe(uploadStream);
+    });
+  }
+
+  // If caller passed a data URL (data:...;base64,AAA...), convert to buffer and stream
+  if (typeof dataUrlOrBuffer === 'string' && dataUrlOrBuffer.indexOf('data:') === 0) {
+    const parts = dataUrlOrBuffer.split(',');
+    const meta = parts[0] || '';
+    const base64 = parts[1] || '';
+    const buffer = Buffer.from(base64, 'base64');
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(opts, (err, result) => {
+        if (err) return reject(err);
+        resolve(result);
+      });
+      streamifier.createReadStream(buffer).pipe(uploadStream);
+    });
+  }
+
+  // Fallback: let cloudinary try to handle (remote URL or other). Keep original call.
+  return cloudinary.uploader.upload(dataUrlOrBuffer, opts);
+}
 
 // Tenant routes: list/create maintenance & complaints under /api
 router.use(authenticate);
@@ -141,13 +194,13 @@ router.post('/upload', async (req, res) => {
       if (process.env.CLOUDINARY_UPLOAD_PRESET)
         opts.upload_preset = process.env.CLOUDINARY_UPLOAD_PRESET;
       if (filename) opts.public_id = filename.replace(/\.[^/.]+$/, '');
-      const result = await cloudinary.uploader.upload(dataUrl, opts);
-      return res.json({ url: result.secure_url });
+      const result = await cloudinaryUploadDataUrl(dataUrl, opts);
+      return res.json({ url: result && result.secure_url });
     }
     return res.json({ url: dataUrl });
   } catch (e) {
-    console.error('tenant upload failed', e && e.message);
-    return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+    console.error('tenant upload failed', e && e.message, e && e.stack, e);
+    return res.status(500).json({ error: 'upload failed', detail: e && (e.message || e) });
   }
 });
 
@@ -165,8 +218,7 @@ router.post('/upload_form', upload.single('file'), async (req, res) => {
         file.size || (file.buffer && file.buffer.length)
       );
     } catch (e) {}
-
-    // If Cloudinary configured, upload the binary
+    // Proceed to handle the uploaded file. (Earlier accidental early-return/logging removed.)
     if (
       process.env.CLOUDINARY_CLOUD_NAME &&
       process.env.CLOUDINARY_API_KEY &&
@@ -179,9 +231,9 @@ router.post('/upload_form', upload.single('file'), async (req, res) => {
       const dataUrl = `data:${
         file.mimetype || 'application/octet-stream'
       };base64,${file.buffer.toString('base64')}`;
-      const result = await cloudinary.uploader.upload(dataUrl, opts);
+      const result = await cloudinaryUploadDataUrl(dataUrl, opts);
       console.log('[tenant/upload_form] uploaded to cloudinary', result && result.secure_url);
-      return res.json({ url: result.secure_url });
+      return res.json({ url: result && result.secure_url });
     }
 
     // fallback: return a data URL so client can still use the file
@@ -202,8 +254,26 @@ router.post('/upload_form', upload.single('file'), async (req, res) => {
 // Returns updated user record: { user }
 router.post('/user/avatar', upload.single('file'), async (req, res) => {
   try {
+    // Log incoming request for debugging connectivity issues
+    try {
+      console.log('[user/avatar] incoming request from ip=', req.ip, 'headers=', {
+        host: req.headers.host,
+        'user-agent': req.headers['user-agent'],
+        authorization: !!req.headers.authorization,
+      });
+    } catch (e) {}
+
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'file required' });
+    try {
+      console.log(
+        '[user/avatar] received file:',
+        file.originalname,
+        file.mimetype,
+        'size=',
+        file.size || (file.buffer && file.buffer.length)
+      );
+    } catch (e) {}
 
     let url = null;
     if (
@@ -217,9 +287,9 @@ router.post('/user/avatar', upload.single('file'), async (req, res) => {
       const dataUrl = `data:${
         file.mimetype || 'application/octet-stream'
       };base64,${file.buffer.toString('base64')}`;
-      const result = await cloudinary.uploader.upload(dataUrl, opts);
+      const result = await cloudinaryUploadDataUrl(dataUrl, opts);
       console.log('[user/avatar] cloudinary result', result && result.secure_url);
-      url = result.secure_url;
+      url = result && result.secure_url;
     } else {
       // fallback to returning data URL
       url = `data:${file.mimetype || 'application/octet-stream'};base64,${file.buffer.toString(
@@ -230,11 +300,33 @@ router.post('/user/avatar', upload.single('file'), async (req, res) => {
     // update user record
     const models = require('../models');
     const { User } = models;
-    const u = await User.findByPk(req.user.id);
-    if (!u) return res.status(404).json({ error: 'user not found' });
-    await u.update({ avatar: url });
-    const out = u.get ? u.get({ plain: true }) : u;
-    return res.json({ user: out });
+    try {
+      console.log('[user/avatar] updating user', {
+        id: req.user && req.user.id,
+        role: req.user && req.user.role,
+        url_length: url ? String(url).length : 0,
+      });
+      const u = await User.findByPk(req.user.id);
+      if (!u) {
+        console.warn('[user/avatar] user not found for id', req.user && req.user.id);
+        return res.status(404).json({ error: 'user not found' });
+      }
+      await u.update({ avatar: url });
+      const out = u.get ? u.get({ plain: true }) : u;
+      return res.json({ user: out });
+    } catch (dbErr) {
+      // Log detailed DB error and return a helpful message
+      console.error(
+        '[user/avatar] failed to save avatar for user',
+        req.user && req.user.id,
+        'role=',
+        req.user && req.user.role,
+        dbErr && dbErr.message
+      );
+      // If this looks like a data length/truncation issue, hint to run migrations
+      const detail = dbErr && dbErr.message ? dbErr.message : String(dbErr);
+      return res.status(500).json({ error: 'failed_to_save_avatar', detail });
+    }
   } catch (e) {
     console.error('user avatar upload failed', e && e.message);
     return res.status(500).json({ error: 'upload failed', detail: e && e.message });
@@ -687,13 +779,13 @@ router.post('/tenant/upload', async (req, res) => {
       if (process.env.CLOUDINARY_UPLOAD_PRESET)
         opts.upload_preset = process.env.CLOUDINARY_UPLOAD_PRESET;
       if (filename) opts.public_id = filename.replace(/\.[^/.]+$/, '');
-      const result = await cloudinary.uploader.upload(dataUrl, opts);
-      return res.json({ url: result.secure_url });
+      const result = await cloudinaryUploadDataUrl(dataUrl, opts);
+      return res.json({ url: result && result.secure_url });
     }
     return res.json({ url: dataUrl });
   } catch (e) {
-    console.error('tenant upload (alias) failed', e && e.message);
-    return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+    console.error('tenant upload (alias) failed', e && e.message, e && e.stack, e);
+    return res.status(500).json({ error: 'upload failed', detail: e && (e.message || e) });
   }
 });
 
@@ -712,14 +804,14 @@ router.post('/tenant/upload_form', upload.single('file'), async (req, res) => {
       const dataUrl = `data:${
         file.mimetype || 'application/octet-stream'
       };base64,${file.buffer.toString('base64')}`;
-      const result = await cloudinary.uploader.upload(dataUrl, opts);
-      return res.json({ url: result.secure_url });
+      const result = await cloudinaryUploadDataUrl(dataUrl, opts);
+      return res.json({ url: result && result.secure_url });
     }
     const base64 = file.buffer.toString('base64');
     const mime = file.mimetype || 'application/octet-stream';
     return res.json({ url: `data:${mime};base64,${base64}` });
   } catch (e) {
-    console.error('tenant upload_form (alias) failed', e && e.message);
-    return res.status(500).json({ error: 'upload failed', detail: e && e.message });
+    console.error('tenant upload_form (alias) failed', e && e.message, e && e.stack, e);
+    return res.status(500).json({ error: 'upload failed', detail: e && (e.message || e) });
   }
 });

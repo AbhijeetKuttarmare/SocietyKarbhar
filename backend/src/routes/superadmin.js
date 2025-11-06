@@ -9,7 +9,7 @@ router.use(authenticate, authorize(['superadmin']));
 
 router.post('/societies', async (req, res) => {
   // accept either `mobile_number` or `mobile` from different frontends
-  const { name, country, city, area } = req.body;
+  const { name, country, city, area, builder_name, image_url } = req.body;
   const mobile_number = req.body.mobile_number || req.body.mobile;
   if (!name) return res.status(400).json({ error: 'name required' });
   // persist mobile_number as well so edit UI can read it back
@@ -19,6 +19,8 @@ router.post('/societies', async (req, res) => {
     city,
     area,
     mobile_number,
+    builder_name: builder_name || null,
+    image_url: image_url || null,
     created_by: req.user.id,
   });
   res.json({ society });
@@ -30,6 +32,8 @@ router.put('/societies/:id', async (req, res) => {
     req.body;
   // accept either `mobile_number` or `mobile` when updating
   const mobile_number = req.body.mobile_number || req.body.mobile;
+  const builder_name = req.body.builder_name;
+  const image_url = req.body.image_url;
   const soc = await Society.findByPk(id);
   if (!soc) return res.status(404).json({ error: 'not found' });
   await soc.update({
@@ -38,6 +42,8 @@ router.put('/societies/:id', async (req, res) => {
     city,
     area,
     mobile_number,
+    builder_name: typeof builder_name !== 'undefined' ? builder_name : soc.builder_name,
+    image_url: typeof image_url !== 'undefined' ? image_url : soc.image_url,
     status,
     subscription_start_date,
     subscription_end_date,
@@ -54,11 +60,22 @@ router.delete('/societies/:id', async (req, res) => {
 });
 
 router.post('/admins', async (req, res) => {
-  const { name, phone, password, societyId } = req.body;
-  if (!phone || !password || !societyId)
-    return res.status(400).json({ error: 'phone,password,societyId required' });
-  const password_hash = await bcrypt.hash(password, 10);
-  const admin = await User.create({ name, phone, password_hash, role: 'admin' });
+  // Accept optional fields: email, permanent_address -> mapped to address, emergency_contact, avatar
+  const { name, phone, password, societyId, email, permanent_address, emergency_contact, avatar } =
+    req.body;
+  if (!phone || !societyId) return res.status(400).json({ error: 'phone,societyId required' });
+  // If password provided, hash it; otherwise leave password_hash null so admin can be invited/created without password
+  const password_hash = password ? await bcrypt.hash(password, 10) : null;
+  const admin = await User.create({
+    name,
+    phone,
+    email: email || null,
+    address: permanent_address || null,
+    emergency_contact: emergency_contact || null,
+    avatar: avatar || null,
+    password_hash,
+    role: 'admin',
+  });
 
   // support passing single id or array of ids
   const ids = Array.isArray(societyId) ? societyId : [societyId];
@@ -92,11 +109,16 @@ router.get('/admins', async (req, res) => {
 // Update admin and assigned societies
 router.put('/admins/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, phone, password, societyId } = req.body;
+  const { name, phone, password, societyId, email, permanent_address, emergency_contact, avatar } =
+    req.body;
   const user = await User.findByPk(id);
   if (!user) return res.status(404).json({ error: 'not found' });
   if (name) user.name = name;
   if (phone) user.phone = phone;
+  if (typeof email !== 'undefined') user.email = email;
+  if (typeof permanent_address !== 'undefined') user.address = permanent_address;
+  if (typeof emergency_contact !== 'undefined') user.emergency_contact = emergency_contact;
+  if (typeof avatar !== 'undefined') user.avatar = avatar;
   if (password) user.password_hash = await bcrypt.hash(password, 10);
   await user.save();
 

@@ -29,7 +29,7 @@ module.exports = (sequelize) => {
       // tenant/owner profile fields
       address: { type: DataTypes.STRING, allowNull: true },
       emergency_contact: { type: DataTypes.STRING, allowNull: true },
-      avatar: { type: DataTypes.STRING, allowNull: true },
+      avatar: { type: DataTypes.TEXT, allowNull: true },
       gender: { type: DataTypes.ENUM('male', 'female', 'other'), allowNull: true },
       move_in: { type: DataTypes.DATE, allowNull: true },
       move_out: { type: DataTypes.DATE, allowNull: true },

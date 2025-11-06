@@ -36,9 +36,9 @@ import AdminProfile from './AdminProfile';
 // - Improves mobile responsiveness by switching to a top navbar + drawer-style sidebar
 // - Uses useWindowDimensions for runtime layout decisions
 
-type Props = { user: any; onLogout: () => void };
+type Props = { user: any; onLogout: () => void; setUser?: (u: any) => void };
 
-export default function AdminScreen({ user, onLogout }: Props) {
+export default function AdminScreen({ user, onLogout, setUser }: Props) {
   const { width } = useWindowDimensions();
   const isDesktop = width >= 900;
   const isTablet = width >= 700 && width < 900;
@@ -1070,11 +1070,11 @@ export default function AdminScreen({ user, onLogout }: Props) {
                 style={{ flex: 1 }}
                 contentContainerStyle={{ paddingVertical: 8, paddingBottom: 96 }}
               >
-                {lastApiError ? (
+                {/* {lastApiError ? (
                   <View style={styles.errorBox}>
                     <Text style={styles.errorText}>API Error: {lastApiError}</Text>
                   </View>
-                ) : null}
+                ) : null} */}
 
                 <View style={[styles.statsRow, isMobile && { paddingHorizontal: 6 }]}>
                   {renderStatCard('Owners', summary?.totalOwners, 'person')}
@@ -1405,6 +1405,7 @@ export default function AdminScreen({ user, onLogout }: Props) {
                   onLogout={onLogout}
                   userAvatar={userAvatar}
                   setUserAvatar={setUserAvatar}
+                  setUser={setUser}
                 />
               </View>
             )}

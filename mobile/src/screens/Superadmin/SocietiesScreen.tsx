@@ -6,15 +6,17 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  TextInput,
-  Modal,
   useWindowDimensions,
+  Image,
 } from 'react-native';
 import api from '../../services/api';
 import { Feather } from '@expo/vector-icons';
 import styles from '../../styles/superadminStyles';
 
-type Props = { user: any };
+type Props = {
+  user: any;
+  navigation: any;
+};
 
 type Society = {
   id: string;
@@ -28,66 +30,21 @@ type Society = {
   admins?: any[];
 };
 
-export default function SocietiesScreen({ user }: Props) {
+export default function SocietiesScreen({ user, navigation }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width < 700;
   const cardWidth = isMobile ? '100%' : 280;
   const TAB_HEIGHT = 72;
   const [societies, setSocieties] = useState<Society[]>([]);
   const [loading, setLoading] = useState(false);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    country: '',
-    city: '',
-    area: '',
-    mobile_number: '',
-  });
-  const [editingSociety, setEditingSociety] = useState<null | Society>(null);
 
-  // Open edit modal for a society: fetch full object and populate form
-  const openEdit = async (soc: Society) => {
-    try {
-      setLoading(true);
-      const headers: any = {};
-      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
-      const res = await api.get(`/api/superadmin/societies/${soc.id}`, { headers });
-      const s = res.data.society || res.data || soc;
-      setEditingSociety(s);
-      setForm({
-        name: s.name || '',
-        country: s.country || '',
-        city: s.city || '',
-        area: s.area || '',
-        mobile_number: s.mobile_number || s.mobile || '',
-      });
-      setModalVisible(true);
-    } catch (err: any) {
-      Alert.alert('Error', 'Could not load society details');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleEditSave = async () => {
-    if (!editingSociety) return Alert.alert('Error', 'Nothing to save');
-    try {
-      setLoading(true);
-      const headers: any = {};
-      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
-      const res = await api.put(`/api/superadmin/societies/${editingSociety.id}`, form, {
-        headers,
-      });
-      // update local state
-      setSocieties((s) => s.map((x) => (x.id === editingSociety.id ? res.data.society : x)));
-      setEditingSociety(null);
-      setModalVisible(false);
-      setForm({ name: '', country: '', city: '', area: '', mobile_number: '' });
-    } catch (err: any) {
-      Alert.alert('Error', 'Failed to update society');
-    } finally {
-      setLoading(false);
-    }
+  // Open edit screen for a society
+  const openEdit = (soc: Society) => {
+    navigation.navigate('AddEditSociety', {
+      society: soc,
+      user: user,
+      onSave: fetchSocieties,
+    });
   };
 
   useEffect(() => {
@@ -108,23 +65,6 @@ export default function SocietiesScreen({ user }: Props) {
     }
   };
 
-  const handleAddSociety = async () => {
-    if (!form.name) return Alert.alert('Validation', 'Name is required');
-    try {
-      setLoading(true);
-      const headers: any = {};
-      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
-      const res = await api.post('/api/superadmin/societies', form, { headers });
-      setSocieties((s) => [res.data.society, ...s]);
-      setModalVisible(false);
-      setForm({ name: '', country: '', city: '', area: '', mobile_number: '' });
-    } catch (err: any) {
-      Alert.alert('Error', 'Failed to create society');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const openCreateAdmin = (soc: Society) => {
     // Navigate to admin creation flow in-app or show modal — simplified here
     Alert.alert('Create Admin', `Open create admin for ${soc.name}`);
@@ -136,11 +76,13 @@ export default function SocietiesScreen({ user }: Props) {
         <TouchableOpacity
           style={styles.addBtn}
           onPress={() => {
-            setModalVisible(true);
-            setEditingSociety(null);
+            navigation.navigate('AddEditSociety', {
+              user: user,
+              onSave: fetchSocieties,
+            });
           }}
         >
-          <Text style={styles.addBtnText}>＋ Add Society</Text>
+          <Text style={styles.addBtnText}>Add Society</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.refreshBtn} onPress={fetchSocieties}>
           <Text style={styles.refreshBtnText}>⟳ Refresh</Text>
@@ -180,7 +122,18 @@ export default function SocietiesScreen({ user }: Props) {
 
               return (
                 <View key={s.id} style={styles.socCard}>
+                  {ss.image_url ? (
+                    <Image
+                      source={{ uri: ss.image_url }}
+                      style={{ width: '100%', height: 120, borderRadius: 8, marginBottom: 8 }}
+                    />
+                  ) : null}
                   <Text style={styles.socCardTitle}>{s.name}</Text>
+                  {ss.builder_name ? (
+                    <Text style={{ color: '#374151', marginBottom: 4 }}>
+                      Builder: {ss.builder_name}
+                    </Text>
+                  ) : null}
                   <Text style={styles.socCardSub}>
                     {ss.address || `${s.area || ''} ${s.city || ''}`}
                   </Text>
@@ -210,67 +163,6 @@ export default function SocietiesScreen({ user }: Props) {
           )}
         </View>
       </ScrollView>
-
-      {/* Modal for Add/Edit */}
-      <Modal
-        visible={modalVisible}
-        animationType="slide"
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View style={styles.modalInner}>
-          <Text style={styles.modalTitle}>{editingSociety ? 'Edit Society' : 'Add Society'}</Text>
-          <TextInput
-            placeholder="Name"
-            value={form.name}
-            onChangeText={(t) => setForm((p) => ({ ...p, name: t }))}
-            style={styles.input}
-          />
-          {editingSociety ? (
-            <TextInput
-              placeholder="Mobile (admin)"
-              value={form.mobile_number}
-              onChangeText={(t) => setForm((p) => ({ ...p, mobile_number: t }))}
-              style={styles.input}
-              keyboardType="phone-pad"
-            />
-          ) : null}
-          <TextInput
-            placeholder="Country"
-            value={form.country}
-            onChangeText={(t) => setForm((p) => ({ ...p, country: t }))}
-            style={styles.input}
-          />
-          <TextInput
-            placeholder="City"
-            value={form.city}
-            onChangeText={(t) => setForm((p) => ({ ...p, city: t }))}
-            style={styles.input}
-          />
-          <TextInput
-            placeholder="Area"
-            value={form.area}
-            onChangeText={(t) => setForm((p) => ({ ...p, area: t }))}
-            style={styles.input}
-          />
-          <View style={styles.modalActions}>
-            <TouchableOpacity
-              style={[styles.modalBtn, { backgroundColor: '#ef4444' }]}
-              onPress={() => {
-                setModalVisible(false);
-                setEditingSociety(null);
-              }}
-            >
-              <Text style={styles.modalBtnText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalBtn, { backgroundColor: '#4f46e5' }]}
-              onPress={editingSociety ? handleEditSave : handleAddSociety}
-            >
-              <Text style={styles.modalBtnText}>Save</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }

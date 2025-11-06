@@ -11,10 +11,13 @@ import {
   ActivityIndicator,
   Modal,
   ScrollView,
+  Image,
   Platform,
   useWindowDimensions,
 } from 'react-native';
-import api from '../services/api';
+import * as ImagePicker from 'expo-image-picker';
+import api, { testConnectivity } from '../services/api';
+import { defaultBaseUrl } from '../services/config';
 import ProfileCard from '../components/ProfileCard';
 import { Linking } from 'react-native';
 import pickAndUploadProfile from '../services/uploadProfile';
@@ -53,9 +56,20 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
     city: '',
     area: '',
     mobile_number: '',
+    builder_name: '',
+    image_url: '',
   });
   const [creatingAdminFor, setCreatingAdminFor] = useState<null | Society>(null);
-  const [adminForm, setAdminForm] = useState({ name: '', phone: '', password: '' });
+  const [adminForm, setAdminForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    permanent_address: '',
+    emergency_contact: '',
+    avatar: '',
+  });
+  const [editingAdmin, setEditingAdmin] = useState<any>(null);
+  const [adminUploading, setAdminUploading] = useState(false);
   const [editingSociety, setEditingSociety] = useState<null | Society>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
@@ -168,6 +182,85 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
     }
   };
 
+  // Debug helper: quick connectivity + upload smoke test from the running device/emulator
+  const testBackendConnectivityAndUpload = async () => {
+    try {
+      const base = defaultBaseUrl();
+      console.debug('[SuperadminScreen] test ping ->', base);
+      const ping = await fetch(`${base}/`);
+      console.debug('[SuperadminScreen] ping status', ping.status);
+      const dataUrl =
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==';
+      const uploadJsonUrl = `${base.replace(/\/$/, '')}/api/upload`;
+      console.debug('[SuperadminScreen] attempting test JSON upload to', uploadJsonUrl);
+      const r = await fetch(uploadJsonUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl, filename: 'test.png' }),
+      });
+      const jd = await r.json().catch(() => ({} as any));
+      console.debug('[SuperadminScreen] test upload result', r.status, jd);
+      Alert.alert('Connectivity test', `ping=${ping.status} upload=${r.status}`);
+    } catch (e: any) {
+      console.warn('[SuperadminScreen] connectivity test failed', e);
+      Alert.alert('Connectivity test failed', e?.message || String(e));
+    }
+  };
+
+  // image picker + upload for modal (uses tenant upload endpoint)
+  const pickImageAndUpload = async () => {
+    try {
+      // quick connectivity check so we can show a clearer error when the backend is unreachable
+      try {
+        const conn = await testConnectivity();
+        if (!conn.ok) {
+          console.warn('[SuperadminScreen] connectivity test failed', conn.error);
+          return Alert.alert('Network', `Cannot reach backend: ${conn.error}`);
+        }
+      } catch (e) {
+        // ignore - proceed to actual upload attempt
+      }
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted)
+        return Alert.alert('Permission required', 'Permission to access photos is required');
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: 'images',
+        quality: 0.8,
+      });
+      if ((result as any).canceled || (result as any).cancelled) return;
+      const asset = (result as any).assets ? (result as any).assets[0] : (result as any);
+      if (!asset || !asset.uri) return Alert.alert('Error', 'Could not read image data');
+      const uri: string = asset.uri;
+      const name = uri.split('/').pop() || 'photo.jpg';
+      const lower = name.toLowerCase();
+      const type = lower.endsWith('.png')
+        ? 'image/png'
+        : lower.endsWith('.webp')
+        ? 'image/webp'
+        : 'image/jpeg';
+
+      const formData = new FormData();
+      formData.append('file', { uri, name, type } as any);
+
+      const uploadUrl = `${defaultBaseUrl()}/api/tenant/upload_form`;
+      const fetchHeaders: any = {};
+      if ((user as any)?.token) fetchHeaders.Authorization = `Bearer ${(user as any).token}`;
+
+      const r = await fetch(uploadUrl, { method: 'POST', body: formData, headers: fetchHeaders });
+      const res = await r.json().catch(() => ({} as any));
+      const url = res && res.url ? res.url : '';
+      if (!url) return Alert.alert('Error', 'Upload did not return a URL');
+      setForm((prev) => ({ ...prev, image_url: url }));
+    } catch (e: any) {
+      console.error('image upload failed', e);
+      try {
+        if (typeof e.toJSON === 'function') console.error('axios error json', e.toJSON());
+      } catch (ee) {}
+      const msg = e?.message || String(e);
+      Alert.alert('Error', `Image upload failed: ${msg}`);
+    }
+  };
+
   const handleAddSociety = async () => {
     if (!form.name) return Alert.alert('Validation', 'Name is required');
     try {
@@ -177,7 +270,15 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       const res = await api.post('/api/superadmin/societies', form, { headers });
       setSocieties((s) => [res.data.society, ...s]);
       setModalVisible(false);
-      setForm({ name: '', country: '', city: '', area: '', mobile_number: '' });
+      setForm({
+        name: '',
+        country: '',
+        city: '',
+        area: '',
+        mobile_number: '',
+        builder_name: '',
+        image_url: '',
+      });
     } catch (err: any) {
       Alert.alert('Error', 'Failed to create society');
     } finally {
@@ -187,7 +288,14 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
 
   const openCreateAdmin = (soc: Society) => {
     setCreatingAdminFor(soc);
-    setAdminForm({ name: '', phone: soc.mobile_number || '', password: '' });
+    setAdminForm({
+      name: '',
+      phone: soc.mobile_number || '',
+      email: '',
+      permanent_address: '',
+      emergency_contact: '',
+      avatar: '',
+    });
   };
   // Fetch full society details before opening edit modal so form is populated with saved values
   const openEdit = async (soc: Society) => {
@@ -204,6 +312,8 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
         city: s.city || '',
         area: s.area || '',
         mobile_number: s.mobile_number || s.mobile || '',
+        builder_name: s.builder_name || '',
+        image_url: s.image_url || '',
       });
       setModalVisible(true);
     } catch (err: any) {
@@ -214,17 +324,22 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
   };
   const handleCreateAdmin = async () => {
     if (!creatingAdminFor) return;
-    if (!adminForm.phone || !adminForm.password)
-      return Alert.alert('Validation', 'Phone and password required');
+    if (!adminForm.phone || !adminForm.name)
+      return Alert.alert('Validation', 'Name and phone required');
     try {
       setLoading(true);
       const headers: any = {};
       if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
-      const r = await api.post(
-        '/api/superadmin/admins',
-        { ...adminForm, societyId: creatingAdminFor.id },
-        { headers }
-      );
+      const payload = {
+        name: adminForm.name,
+        phone: adminForm.phone,
+        email: adminForm.email,
+        permanent_address: adminForm.permanent_address,
+        emergency_contact: adminForm.emergency_contact,
+        avatar: adminForm.avatar,
+        societyId: creatingAdminFor.id,
+      };
+      const r = await api.post('/api/superadmin/admins', payload, { headers });
       Alert.alert('Success', 'Admin created');
       // Refresh societies so the newly created admin is wired into the society record shown in UI
       try {
@@ -234,10 +349,56 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       }
       setCreatingAdminFor(null);
       // Optionally clear admin form
-      setAdminForm({ name: '', phone: '', password: '' });
+      setAdminForm({
+        name: '',
+        phone: '',
+        email: '',
+        permanent_address: '',
+        emergency_contact: '',
+        avatar: '',
+      });
       // If API returned the created admin, we could also merge it into societies state, but fetch does that
     } catch (err: any) {
       Alert.alert('Error', 'Failed to create admin');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdateAdmin = async () => {
+    if (!editingAdmin) return;
+    if (!adminForm.phone || !adminForm.name)
+      return Alert.alert('Validation', 'Name and phone required');
+    try {
+      setLoading(true);
+      const headers: any = {};
+      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
+      const payload = {
+        name: adminForm.name,
+        phone: adminForm.phone,
+        email: adminForm.email,
+        permanent_address: adminForm.permanent_address,
+        emergency_contact: adminForm.emergency_contact,
+        avatar: adminForm.avatar,
+      };
+      const r = await api.put(`/api/superadmin/admins/${editingAdmin.id}`, payload, { headers });
+      Alert.alert('Success', 'Admin updated');
+      // refresh admins list
+      try {
+        await fetchAdmins();
+      } catch (e) {}
+      setEditingAdmin(null);
+      setAdminForm({
+        name: '',
+        phone: '',
+        email: '',
+        permanent_address: '',
+        emergency_contact: '',
+        avatar: '',
+      });
+    } catch (err: any) {
+      console.warn('update admin failed', err);
+      Alert.alert('Error', 'Failed to update admin');
     } finally {
       setLoading(false);
     }
@@ -278,7 +439,15 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       setSocieties((s) => s.map((x) => (x.id === editingSociety.id ? res.data.society : x)));
       setEditingSociety(null);
       setModalVisible(false);
-      setForm({ name: '', country: '', city: '', area: '', mobile_number: '' });
+      setForm({
+        name: '',
+        country: '',
+        city: '',
+        area: '',
+        mobile_number: '',
+        builder_name: '',
+        image_url: '',
+      });
     } catch (err: any) {
       Alert.alert('Error', 'Failed to update');
     } finally {
@@ -323,6 +492,8 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
               city: item.city || '',
               area: item.area || '',
               mobile_number: item.mobile_number || '',
+              builder_name: (item as any).builder_name || '',
+              image_url: (item as any).image_url || '',
             });
             setModalVisible(true);
           }}
@@ -436,6 +607,12 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                   <TouchableOpacity style={styles.refreshBtn} onPress={fetchSocieties}>
                     <Text style={styles.refreshBtnText}>⟳ Refresh</Text>
                   </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.refreshBtn, { marginLeft: 8, backgroundColor: '#f3f4f6' }]}
+                    onPress={testBackendConnectivityAndUpload}
+                  >
+                    <Text style={[styles.refreshBtnText, { color: '#111' }]}>Test Backend</Text>
+                  </TouchableOpacity>
                 </View>
                 {loading ? (
                   <ActivityIndicator style={{ marginTop: 20 }} />
@@ -494,21 +671,34 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                               },
                             ]}
                           >
-                            <View
-                              style={{
-                                width: 56,
-                                height: 56,
-                                borderRadius: 28,
-                                backgroundColor: '#eef2ff',
-                                justifyContent: 'center',
-                                alignItems: 'center',
-                                marginRight: 12,
-                              }}
-                            >
-                              <Text style={{ fontWeight: '800', color: '#4f46e5', fontSize: 16 }}>
-                                {initials}
-                              </Text>
-                            </View>
+                            {(s as any).image_url || (s as any).image ? (
+                              <Image
+                                source={{ uri: (s as any).image_url || (s as any).image }}
+                                style={{
+                                  width: 56,
+                                  height: 56,
+                                  borderRadius: 28,
+                                  marginRight: 12,
+                                  backgroundColor: '#eef2ff',
+                                }}
+                              />
+                            ) : (
+                              <View
+                                style={{
+                                  width: 56,
+                                  height: 56,
+                                  borderRadius: 28,
+                                  backgroundColor: '#eef2ff',
+                                  justifyContent: 'center',
+                                  alignItems: 'center',
+                                  marginRight: 12,
+                                }}
+                              >
+                                <Text style={{ fontWeight: '800', color: '#4f46e5', fontSize: 16 }}>
+                                  {initials}
+                                </Text>
+                              </View>
+                            )}
 
                             <View style={{ flex: 1 }}>
                               <Text style={{ fontSize: 16, fontWeight: '700' }}>{s.name}</Text>
@@ -555,6 +745,13 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                                   </View>
                                 )}
                               </View>
+
+                              {/* Builder name if present */}
+                              {(s as any).builder_name ? (
+                                <Text style={{ color: '#6b7280', marginTop: 6 }}>
+                                  Builder: {(s as any).builder_name}
+                                </Text>
+                              ) : null}
 
                               <Text style={{ color: '#374151', marginTop: 8 }}>
                                 Admin: {adminName}
@@ -645,22 +842,28 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                             },
                           ]}
                         >
-                          {/* Avatar / initials */}
-                          <View
-                            style={{
-                              width: 56,
-                              height: 56,
-                              borderRadius: 28,
-                              backgroundColor: '#eef2ff',
-                              justifyContent: 'center',
-                              alignItems: 'center',
-                              marginRight: 12,
-                            }}
-                          >
-                            <Text style={{ fontWeight: '800', color: '#4f46e5', fontSize: 16 }}>
-                              {initials}
-                            </Text>
-                          </View>
+                          {(admin as any).avatar ? (
+                            <Image
+                              source={{ uri: (admin as any).avatar }}
+                              style={{ width: 56, height: 56, borderRadius: 28, marginRight: 12 }}
+                            />
+                          ) : (
+                            <View
+                              style={{
+                                width: 56,
+                                height: 56,
+                                borderRadius: 28,
+                                backgroundColor: '#eef2ff',
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                marginRight: 12,
+                              }}
+                            >
+                              <Text style={{ fontWeight: '800', color: '#4f46e5', fontSize: 16 }}>
+                                {initials}
+                              </Text>
+                            </View>
+                          )}
 
                           {/* Main info */}
                           <View style={{ flex: 1 }}>
@@ -711,9 +914,20 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                           <View style={{ marginLeft: 12, alignItems: 'flex-end' }}>
                             <TouchableOpacity
                               style={{ padding: 8 }}
-                              onPress={() =>
-                                Alert.alert('Edit admin', 'Edit functionality not implemented')
-                              }
+                              onPress={() => {
+                                // open edit modal for this admin
+                                const a = item as any;
+                                const addr = a.address || a.permanent_address || '';
+                                setEditingAdmin(a);
+                                setAdminForm({
+                                  name: a.name || '',
+                                  phone: a.phone || a.mobile_number || '',
+                                  email: a.email || '',
+                                  permanent_address: addr,
+                                  emergency_contact: a.emergency_contact || '',
+                                  avatar: a.avatar || a.image || a.avatar_url || '',
+                                });
+                              }}
                             >
                               <Feather name="edit-3" size={18} color="#10b981" />
                             </TouchableOpacity>
@@ -854,6 +1068,47 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 onChangeText={(t) => setForm((p) => ({ ...p, area: t }))}
                 style={styles.input}
               />
+              <TextInput
+                placeholder="Builder name (optional)"
+                value={form.builder_name}
+                onChangeText={(t) => setForm((p) => ({ ...p, builder_name: t }))}
+                style={styles.input}
+              />
+
+              {/* Image Picker Section */}
+              <Text style={{ fontSize: 14, color: '#6b7280', marginBottom: 8, marginTop: 8 }}>
+                Society Image
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+                <TouchableOpacity
+                  style={[styles.smallBtn, { paddingVertical: 10, paddingHorizontal: 16 }]}
+                  onPress={pickImageAndUpload}
+                >
+                  <Text style={{ color: '#fff' }}>Upload Photo</Text>
+                </TouchableOpacity>
+                {form.image_url ? (
+                  <>
+                    <Image
+                      source={{ uri: form.image_url }}
+                      style={{ width: 100, height: 70, marginLeft: 12, borderRadius: 8 }}
+                    />
+                    <TouchableOpacity
+                      style={[
+                        styles.smallBtn,
+                        {
+                          backgroundColor: '#ef4444',
+                          marginLeft: 12,
+                          paddingVertical: 8,
+                          paddingHorizontal: 12,
+                        },
+                      ]}
+                      onPress={() => setForm((p) => ({ ...p, image_url: '' }))}
+                    >
+                      <Text style={{ color: '#fff' }}>Remove</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : null}
+              </View>
               <View style={styles.modalActions}>
                 <TouchableOpacity
                   style={[styles.modalBtn, { backgroundColor: '#ef4444' }]}
@@ -875,12 +1130,17 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
           </Modal>
 
           <Modal
-            visible={!!creatingAdminFor}
+            visible={!!creatingAdminFor || !!editingAdmin}
             animationType="slide"
-            onRequestClose={() => setCreatingAdminFor(null)}
+            onRequestClose={() => {
+              setCreatingAdminFor(null);
+              setEditingAdmin(null);
+            }}
           >
             <View style={styles.modalInner}>
-              <Text style={styles.modalTitle}>Create Admin for {creatingAdminFor?.name}</Text>
+              <Text style={styles.modalTitle}>
+                {editingAdmin ? `Edit Admin` : `Create Admin for ${creatingAdminFor?.name}`}
+              </Text>
               <TextInput
                 placeholder="Name"
                 value={adminForm.name}
@@ -895,24 +1155,101 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 keyboardType="phone-pad"
               />
               <TextInput
-                placeholder="Password"
-                value={adminForm.password}
-                onChangeText={(t) => setAdminForm((p) => ({ ...p, password: t }))}
+                placeholder="Email"
+                value={adminForm.email}
+                onChangeText={(t) => setAdminForm((p) => ({ ...p, email: t }))}
                 style={styles.input}
-                secureTextEntry
+                keyboardType="email-address"
               />
+              <TextInput
+                placeholder="Permanent address"
+                value={adminForm.permanent_address}
+                onChangeText={(t) => setAdminForm((p) => ({ ...p, permanent_address: t }))}
+                style={styles.input}
+              />
+              <TextInput
+                placeholder="Emergency contact number"
+                value={adminForm.emergency_contact}
+                onChangeText={(t) => setAdminForm((p) => ({ ...p, emergency_contact: t }))}
+                style={styles.input}
+                keyboardType="phone-pad"
+              />
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                <TouchableOpacity
+                  style={[styles.smallBtn, { paddingVertical: 8, paddingHorizontal: 12 }]}
+                  onPress={async () => {
+                    try {
+                      setAdminUploading(true);
+                      const url = await pickAndUploadProfile();
+                      setAdminUploading(false);
+                      if (!url) return; // cancelled
+                      setAdminForm((p) => ({ ...p, avatar: url }));
+                      // preview will show automatically
+                    } catch (e: any) {
+                      setAdminUploading(false);
+                      console.warn('admin profile upload failed', e);
+                      Alert.alert('Upload failed', e?.message || 'Upload failed');
+                    }
+                  }}
+                >
+                  <Text style={{ color: '#fff' }}>Upload Profile Photo</Text>
+                </TouchableOpacity>
+
+                {adminUploading ? (
+                  <ActivityIndicator style={{ marginLeft: 12 }} />
+                ) : adminForm.avatar ? (
+                  <>
+                    <Image
+                      source={{ uri: adminForm.avatar }}
+                      style={{ width: 72, height: 48, marginLeft: 12, borderRadius: 6 }}
+                    />
+                    <View style={{ marginLeft: 8, flexDirection: 'row', alignItems: 'center' }}>
+                      <View
+                        style={{
+                          backgroundColor: '#d1fae5',
+                          paddingHorizontal: 8,
+                          paddingVertical: 4,
+                          borderRadius: 8,
+                          marginRight: 8,
+                        }}
+                      >
+                        <Text style={{ color: '#065f46', fontSize: 12 }}>Uploaded</Text>
+                      </View>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.smallBtn,
+                          {
+                            backgroundColor: '#ef4444',
+                            paddingVertical: 6,
+                            paddingHorizontal: 10,
+                          },
+                        ]}
+                        onPress={() => setAdminForm((p) => ({ ...p, avatar: '' }))}
+                      >
+                        <Text style={{ color: '#fff' }}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                ) : null}
+              </View>
+
               <View style={styles.modalActions}>
                 <TouchableOpacity
                   style={[styles.modalBtn, { backgroundColor: '#ef4444' }]}
-                  onPress={() => setCreatingAdminFor(null)}
+                  onPress={() => {
+                    setCreatingAdminFor(null);
+                    setEditingAdmin(null);
+                  }}
                 >
                   <Text style={styles.modalBtnText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalBtn, { backgroundColor: '#10b981' }]}
-                  onPress={handleCreateAdmin}
+                  onPress={editingAdmin ? handleUpdateAdmin : handleCreateAdmin}
                 >
-                  <Text style={styles.modalBtnText}>Create</Text>
+                  <Text style={styles.modalBtnText}>{editingAdmin ? 'Update' : 'Create'}</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -930,16 +1267,95 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                   address={(user as any)?.address || (user as any)?.area || ''}
                   imageUri={userAvatar || (user as any)?.avatar || (user as any)?.image}
                   onEdit={async () => {
+                    // Perform a single multipart POST to /api/user/avatar so backend
+                    // uploads to Cloudinary and persists the avatar URL in the DB.
                     try {
-                      const url = await pickAndUploadProfile();
-                      if (!url) return; // cancelled
-                      await api.put('/api/user', { avatar: url });
-                      setUserAvatar(url);
+                      // Request permission and pick image
+                      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                      if (!perm.granted) return alert('Permission to access photos is required');
+                      const res = await ImagePicker.launchImageLibraryAsync({
+                        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                        quality: 0.8,
+                      });
+                      const cancelled =
+                        (res as any).canceled === true || (res as any).cancelled === true;
+                      if (cancelled) return; // user cancelled
+                      const asset = (res as any).assets ? (res as any).assets[0] : (res as any);
+                      if (!asset || !asset.uri) return alert('Could not read image data');
+
+                      const uri: string = asset.uri;
+                      const name = uri.split('/').pop() || 'photo.jpg';
+                      const lower = name.toLowerCase();
+                      const type = lower.endsWith('.png')
+                        ? 'image/png'
+                        : lower.endsWith('.webp')
+                        ? 'image/webp'
+                        : 'image/jpeg';
+
+                      const formData = new FormData();
+                      if (Platform.OS === 'web') {
+                        // On web convert blob
+                        const resp = await fetch(uri);
+                        const blob = await resp.blob();
+                        formData.append('file', blob, name);
+                      } else {
+                        // On native (Expo/Android/iOS) convert the local file URI to a Blob
+                        // and append that Blob to FormData. This avoids "TypeError: Network request failed"
+                        // which can occur when fetch tries to send a local file URI directly on some devices.
+                        try {
+                          const resp = await fetch(uri);
+                          const blob = await resp.blob();
+                          formData.append('file', blob, name);
+                        } catch (e) {
+                          // Fallback to the previous approach if blob conversion fails for any reason
+                          formData.append('file', { uri, name, type } as any);
+                        }
+                      }
+
+                      // Determine base URL like other upload helpers
+                      const base =
+                        (api.defaults && (api.defaults as any).baseURL) || defaultBaseUrl();
+                      const uploadUrl = `${String(base).replace(/\/$/, '')}/api/user/avatar`;
+
+                      const headers: any = {};
+                      if ((user as any)?.token)
+                        headers.Authorization = `Bearer ${(user as any).token}`;
+                      // Do NOT set Content-Type here; let fetch set the multipart boundary
+
+                      console.debug(
+                        '[SuperadminScreen] uploadUrl=',
+                        uploadUrl,
+                        'headers=',
+                        headers
+                      );
+                      const r = await fetch(uploadUrl, { method: 'POST', body: formData, headers });
+                      let jd: any = {};
+                      try {
+                        jd = await r.json();
+                      } catch (e) {
+                        console.debug(
+                          '[SuperadminScreen] upload response not JSON or empty body',
+                          e
+                        );
+                      }
+                      console.debug('[SuperadminScreen] upload response', r.status, jd);
+                      if (!r.ok) {
+                        const msg =
+                          jd && (jd.error || jd.detail)
+                            ? jd.error || jd.detail
+                            : `status=${r.status}`;
+                        return alert('Upload failed: ' + String(msg));
+                      }
+                      // Backend returns updated user record
+                      const updatedUser = jd && jd.user ? jd.user : null;
+                      const avatarUrl = updatedUser?.avatar || (jd && jd.url) || null;
+                      if (!avatarUrl) return alert('Upload succeeded but no avatar URL returned');
+                      setUserAvatar(avatarUrl);
                       alert('Profile photo updated');
-                    } catch (e) {
+                    } catch (e: any) {
                       console.warn('superadmin profile upload failed', e);
-                      const msg = (e as any)?.message || 'Upload failed';
-                      alert(msg);
+                      const msg = e?.message || String(e);
+                      alert('Upload failed: ' + msg);
                     }
                   }}
                   onCall={(p) => {
