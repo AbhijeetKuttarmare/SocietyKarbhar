@@ -1,4 +1,4 @@
-"use strict";
+'use strict';
 
 module.exports = {
   async up(queryInterface, Sequelize) {
@@ -15,5 +15,5 @@ module.exports = {
     if (table.created_by) {
       await queryInterface.removeColumn('notices', 'created_by');
     }
-  }
+  },
 };

@@ -3,10 +3,16 @@
 module.exports = {
   async up(queryInterface, Sequelize) {
     const { UUID } = Sequelize;
-    await queryInterface.addColumn('flats', 'buildingId', { type: UUID, allowNull: true });
+    const table = await queryInterface.describeTable('flats');
+    if (!table.buildingId) {
+      await queryInterface.addColumn('flats', 'buildingId', { type: UUID, allowNull: true });
+    }
   },
 
   async down(queryInterface) {
-    await queryInterface.removeColumn('flats', 'buildingId');
+    const table = await queryInterface.describeTable('flats');
+    if (table.buildingId) {
+      await queryInterface.removeColumn('flats', 'buildingId');
+    }
   }
 };
