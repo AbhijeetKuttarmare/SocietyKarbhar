@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "offline": "serverless offline",
+    "deploy:serverless": "serverless deploy",
     "test": "jest --runInBand",
     "migrate": "sequelize db:migrate",
     "seed": "node src/seeds/seed.js"
@@ -30,6 +32,8 @@
     "uuid": "^9.0.0"
   },
   "devDependencies": {
+    "serverless": "^3.40.0",
+    "serverless-offline": "^12.0.0",
     "cross-env": "^7.0.3",
     "jest": "^29.6.1",
     "nodemon": "^2.0.22",
