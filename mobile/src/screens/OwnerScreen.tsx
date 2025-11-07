@@ -18,7 +18,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 // BottomTab removed for OwnerScreen (we render an inline bottom bar here)
 import ProfileCard from '../components/ProfileCard';
-import * as FileSystem from 'expo-file-system';
+// Use the legacy expo-file-system API to retain readAsStringAsync/EncodingType helpers
+// The modern filesystem API uses File/Directory classes; migrating is possible but larger.
+import * as FileSystem from 'expo-file-system/legacy';
 import api, { setAuthHeader, attachErrorHandler } from '../services/api';
 // WebView for in-app PDF rendering on native
 // attempt to require WebView optionally at runtime on native only.
@@ -269,6 +271,12 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   const [previewLoading, setPreviewLoading] = useState(false);
   const [uploadingPropertyDoc, setUploadingPropertyDoc] = useState(false);
   const [uploadingProof, setUploadingProof] = useState<Record<string, boolean>>({});
+  // Owner-side verify modal state: when a tenant bill has payment_pending, owner can preview & verify
+  const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [verifyBill, setVerifyBill] = useState<any>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [selectedProofs, setSelectedProofs] = useState<Record<string, string>>({});
+  const [billsView, setBillsView] = useState<'tenant' | 'my'>('tenant');
   const [deletingTenantField, setDeletingTenantField] = useState<string | null>(null);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [flats, setFlats] = useState<any[]>([]);
@@ -615,9 +623,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   async function uploadFileAndGetUrl(uri: string, filename?: string) {
     try {
       // read file as base64
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
       const dataUrl = `data:application/octet-stream;base64,${base64}`;
       const up = await api.post('/api/owner/upload', { dataUrl, filename: filename || 'file' });
       return up.data && (up.data.url || up.data.file_url);
@@ -625,6 +631,83 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       console.warn('uploadFileAndGetUrl failed', e);
       return uri; // fallback to local uri
     }
+  }
+
+  // Robust multipart + JSON fallback uploader for local URIs
+  async function uploadLocalUri(uri: string, filename?: string) {
+    try {
+      // build multipart formdata
+      const formData: any = new FormData();
+      try {
+        const resp = await fetch(uri);
+        const blob = await resp.blob();
+        formData.append('file', blob, filename || 'file');
+      } catch (e) {
+        // if fetch->blob fails (some local URIs), fallback to RN object
+        formData.append('file', {
+          uri,
+          name: filename || 'file',
+          type: 'application/octet-stream',
+        } as any);
+      }
+
+      const base = (api.defaults && (api.defaults as any).baseURL) || '';
+      if (!base) {
+        console.warn('uploadLocalUri: api baseURL not set');
+      }
+      const uploadUrl = `${String(base).replace(/\/$/, '')}/api/upload_form`;
+      let token: string | null = null;
+      try {
+        token = await AsyncStorage.getItem('token');
+      } catch (ee) {}
+      const headers: any = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      try {
+        console.debug('[uploadLocalUri] multipart uploadUrl=', uploadUrl);
+        const r = await fetch(uploadUrl, { method: 'POST', body: formData, headers });
+        const text = await r.text().catch(() => '');
+        let jd: any = {};
+        try {
+          jd = text ? JSON.parse(text) : {};
+        } catch (e) {
+          jd = { raw: text };
+        }
+        console.debug('[uploadLocalUri] multipart response status=', r.status, 'body=', jd);
+        if (r.ok && jd && (jd.url || jd.file_url)) return jd.url || jd.file_url;
+      } catch (e) {
+        console.warn('[uploadLocalUri] multipart fetch failed', e);
+      }
+
+      // Fallback to base64 JSON upload
+      try {
+        const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+        const dataUrl = `data:application/octet-stream;base64,${base64}`;
+        const uploadJsonUrl = uploadUrl.replace(/\/api\/upload_form$/, '/api/upload');
+        const upHeaders: any = { 'Content-Type': 'application/json' };
+        if (token) upHeaders.Authorization = `Bearer ${token}`;
+        console.debug('[uploadLocalUri] attempting base64 fallback to', uploadJsonUrl);
+        const r2 = await fetch(uploadJsonUrl, {
+          method: 'POST',
+          headers: upHeaders,
+          body: JSON.stringify({ dataUrl, filename }),
+        });
+        const text2 = await r2.text().catch(() => '');
+        let j2: any = {};
+        try {
+          j2 = text2 ? JSON.parse(text2) : {};
+        } catch (e) {
+          j2 = { raw: text2 };
+        }
+        console.debug('[uploadLocalUri] base64 fallback status=', r2.status, 'body=', j2);
+        if (r2.ok && j2 && (j2.url || j2.file_url)) return j2.url || j2.file_url;
+      } catch (e) {
+        console.warn('[uploadLocalUri] base64 fallback failed', e);
+      }
+    } catch (e) {
+      console.warn('uploadLocalUri unexpected error', e);
+    }
+    return null;
   }
 
   function openAddTenant(t?: any) {
@@ -1720,116 +1803,383 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
           {activeTab === 'bills' && (
             <View>
-              <Text style={styles.sectionTitle}>My Bills</Text>
-              {myBills.length === 0 ? (
-                <View style={{ padding: 12 }}>
-                  <Text style={{ color: '#666' }}>No bills assigned to you.</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={myBills}
-                  keyExtractor={(m: any) => m.id}
-                  renderItem={({ item }) => (
-                    <View style={styles.maintCard}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ fontWeight: '700' }}>{item.title}</Text>
-                        <Text style={{ color: '#666' }}>{item.description}</Text>
-                        {item.payment_proof_url ? (
-                          <Text style={{ color: '#666', marginTop: 6 }}>Proof attached</Text>
-                        ) : null}
-                      </View>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <Text>₹{item.cost}</Text>
-                        <Text
-                          style={{
-                            color:
-                              item.status === 'payment_pending'
-                                ? '#e67e22'
-                                : item.status === 'closed'
-                                ? '#2ecc71'
-                                : '#6b7280',
-                          }}
-                        >
-                          {item.status}
-                        </Text>
-                        <View style={{ height: 8 }} />
-                        <TouchableOpacity
-                          style={styles.smallBtn}
-                          disabled={!!uploadingProof[item.id]}
-                          onPress={async () => {
-                            try {
-                              setUploadingProof((s) => ({ ...(s || {}), [item.id]: true }));
-                              // Use centralized picker+uploader which works on web (file input) and native
-                              const url = await pickAndUploadFile({
-                                accept: '*/*',
-                                fallbackApiPath: '/api/owner/upload',
-                              });
-                              if (!url) return alert('Upload failed');
-                              // call mark-paid endpoint (same as tenant flow) to set payment_proof_url
-                              const r = await api.post(`/api/bills/${item.id}/mark-paid`, {
-                                payment_proof_url: url,
-                              });
-                              const updated = r.data && r.data.bill;
-                              if (updated) {
-                                // update local list
-                                setMyBills((s) =>
-                                  s.map((it) => (it.id === updated.id ? updated : it))
-                                );
-                                alert('Payment proof submitted. Verification pending.');
-                              } else alert('Submitted');
-                            } catch (e) {
-                              console.warn('upload proof failed', e);
-                              alert('Failed to upload proof');
-                            } finally {
-                              setUploadingProof((s) => ({ ...(s || {}), [item.id]: false }));
-                            }
-                          }}
-                        >
-                          {uploadingProof[item.id] ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                          ) : (
-                            <Text style={{ color: '#fff' }}>Upload Proof</Text>
-                          )}
-                        </TouchableOpacity>
-                      </View>
+              {/* bills toggle: tenant (raised by you) or my (assigned to you) */}
+              <View style={{ flexDirection: 'row', marginBottom: 12, gap: 8 }}>
+                <TouchableOpacity
+                  style={[styles.segment, billsView === 'tenant' ? styles.segmentActive : {}]}
+                  onPress={() => setBillsView('tenant')}
+                >
+                  <Text style={billsView === 'tenant' ? { color: '#fff' } : {}}>Tenant Bills</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.segment, billsView === 'my' ? styles.segmentActive : {}]}
+                  onPress={() => setBillsView('my')}
+                >
+                  <Text style={billsView === 'my' ? { color: '#fff' } : {}}>My Bills</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* My Bills view */}
+              {billsView === 'my' && (
+                <>
+                  <Text style={styles.sectionTitle}>My Bills</Text>
+                  {myBills.length === 0 ? (
+                    <View style={{ padding: 12 }}>
+                      <Text style={{ color: '#666' }}>No bills assigned to you.</Text>
                     </View>
+                  ) : (
+                    <FlatList
+                      data={myBills}
+                      keyExtractor={(m: any) => m.id}
+                      nestedScrollEnabled={true}
+                      contentContainerStyle={{ paddingBottom: 120 + insets.bottom }}
+                      renderItem={({ item }) => (
+                        <View style={styles.maintCard}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontWeight: '700' }}>{item.title}</Text>
+                            <Text style={{ color: '#666' }}>{item.description}</Text>
+                            {item.payment_proof_url ? (
+                              <Text style={{ color: '#666', marginTop: 6 }}>Proof attached</Text>
+                            ) : null}
+                          </View>
+                          <View style={{ alignItems: 'flex-end' }}>
+                            <Text>₹{item.cost}</Text>
+                            <Text
+                              style={{
+                                color:
+                                  item.status === 'payment_pending'
+                                    ? '#e67e22'
+                                    : item.status === 'closed'
+                                    ? '#2ecc71'
+                                    : '#6b7280',
+                              }}
+                            >
+                              {item.status}
+                            </Text>
+                            <View style={{ height: 8 }} />
+                            {/* Upload flow: pick image locally first, preview, then submit (same as tenant flow) */}
+                            {!selectedProofs[item.id] ? (
+                              <TouchableOpacity
+                                style={styles.smallBtn}
+                                disabled={!!uploadingProof[item.id]}
+                                onPress={async () => {
+                                  try {
+                                    // pick image locally (native uses expo-image-picker for gallery UX)
+                                    if (Platform.OS !== 'web') {
+                                      try {
+                                        const ImagePicker: any = await import('expo-image-picker');
+                                        const perm =
+                                          await ImagePicker.requestMediaLibraryPermissionsAsync();
+                                        if (!perm.granted) {
+                                          alert('Permission to access photos is required');
+                                          return;
+                                        }
+                                        const res = await ImagePicker.launchImageLibraryAsync({
+                                          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                                          allowsEditing: true,
+                                          quality: 0.8,
+                                          base64: false,
+                                        });
+                                        const cancelled =
+                                          (res as any).canceled === true ||
+                                          (res as any).cancelled === true;
+                                        if (cancelled) return;
+                                        const assets = (res as any).assets;
+                                        const uri =
+                                          Array.isArray(assets) && assets.length
+                                            ? assets[0].uri
+                                            : (res as any).uri;
+                                        if (uri)
+                                          setSelectedProofs((s) => ({
+                                            ...(s || {}),
+                                            [item.id]: uri,
+                                          }));
+                                      } catch (e) {
+                                        console.warn('image pick failed', e);
+                                        alert('Failed to pick image');
+                                      }
+                                    } else {
+                                      // web fallback: reuse pickAndUploadFile which returns an uploaded url (preview will be remote)
+                                      try {
+                                        const url = await pickAndUploadFile({
+                                          accept: 'image/*',
+                                          fallbackApiPath: '/api/owner/upload',
+                                        });
+                                        if (url)
+                                          setSelectedProofs((s) => ({
+                                            ...(s || {}),
+                                            [item.id]: url,
+                                          }));
+                                      } catch (e) {
+                                        console.warn('web pick failed', e);
+                                        alert('Failed to pick file');
+                                      }
+                                    }
+                                  } catch (e) {
+                                    console.warn('pick image error', e);
+                                  }
+                                }}
+                              >
+                                <Text style={{ color: '#fff' }}>Upload Proof</Text>
+                              </TouchableOpacity>
+                            ) : (
+                              <View style={{ alignItems: 'flex-end' }}>
+                                <Image
+                                  source={{ uri: selectedProofs[item.id] }}
+                                  style={{
+                                    width: 80,
+                                    height: 80,
+                                    borderRadius: 6,
+                                    marginBottom: 8,
+                                  }}
+                                  resizeMode="cover"
+                                />
+                                <View style={{ flexDirection: 'row' }}>
+                                  <TouchableOpacity
+                                    style={[styles.smallBtn, { marginRight: 8 }]}
+                                    onPress={async () => {
+                                      // submit selected proof: upload if local uri, else use directly
+                                      try {
+                                        setUploadingProof((s) => ({
+                                          ...(s || {}),
+                                          [item.id]: true,
+                                        }));
+                                        const localUri = selectedProofs[item.id];
+                                        let url = localUri;
+                                        if (!/^https?:\/\//.test(String(localUri))) {
+                                          // upload local file to server (better multipart + fallback)
+                                          url = await uploadLocalUri(localUri);
+                                        }
+                                        if (!url) throw new Error('upload failed');
+                                        const r = await api.post(
+                                          `/api/bills/${item.id}/mark-paid`,
+                                          { payment_proof_url: url }
+                                        );
+                                        const updated = r.data && r.data.bill;
+                                        if (updated) {
+                                          setMyBills((s) =>
+                                            s.map((it) => (it.id === updated.id ? updated : it))
+                                          );
+                                          alert('Payment proof submitted. Verification pending.');
+                                        } else {
+                                          alert('Submitted');
+                                        }
+                                        // clear selected preview
+                                        setSelectedProofs((s) => {
+                                          const copy = { ...(s || {}) };
+                                          delete copy[item.id];
+                                          return copy;
+                                        });
+                                      } catch (e: any) {
+                                        console.warn('submit proof failed', e);
+                                        // show server response if available for easier debugging
+                                        let msg = 'Failed to submit proof';
+                                        try {
+                                          if (e && e.response && e.response.data)
+                                            msg = JSON.stringify(e.response.data);
+                                          else if (e && e.message) msg = e.message;
+                                        } catch (ee) {}
+                                        alert(msg);
+                                      } finally {
+                                        setUploadingProof((s) => ({
+                                          ...(s || {}),
+                                          [item.id]: false,
+                                        }));
+                                      }
+                                    }}
+                                  >
+                                    {uploadingProof[item.id] ? (
+                                      <ActivityIndicator size="small" color="#fff" />
+                                    ) : (
+                                      <Text style={{ color: '#fff' }}>Submit Proof</Text>
+                                    )}
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    style={styles.smallBtnClose}
+                                    onPress={() =>
+                                      setSelectedProofs((s) => {
+                                        const copy = { ...(s || {}) };
+                                        delete copy[item.id];
+                                        return copy;
+                                      })
+                                    }
+                                  >
+                                    <Text style={styles.closeText}>Remove</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+                            )}
+                          </View>
+                        </View>
+                      )}
+                    />
                   )}
-                />
+                </>
               )}
 
-              <View style={{ height: 12 }} />
-              <View
-                style={[
-                  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-                ]}
-              >
-                <Text style={styles.sectionTitle}>Tenant Bills (raised by you)</Text>
-                {/* New Bill action removed per UI request */}
-              </View>
-              {tenantBills.length === 0 ? (
-                <View style={{ padding: 12 }}>
-                  <Text style={{ color: '#666' }}>No bills raised by you.</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={tenantBills}
-                  keyExtractor={(m: any) => m.id}
-                  renderItem={({ item }) => (
-                    <View style={styles.maintCard}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ fontWeight: '700' }}>{item.title}</Text>
-                        <Text style={{ color: '#666' }}>{item.description}</Text>
-                      </View>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <Text>₹{item.cost}</Text>
-                        <Text style={{ color: item.status === 'pending' ? '#e67e22' : '#2ecc71' }}>
-                          {item.status}
-                        </Text>
-                      </View>
+              {/* Tenant Bills view */}
+              {billsView === 'tenant' && (
+                <>
+                  <View style={{ height: 12 }} />
+                  <View
+                    style={[
+                      {
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      },
+                    ]}
+                  >
+                    <Text style={styles.sectionTitle}>Tenant Bills (raised by you)</Text>
+                    {/* New Bill action removed per UI request */}
+                  </View>
+                  {tenantBills.length === 0 ? (
+                    <View style={{ padding: 12 }}>
+                      <Text style={{ color: '#666' }}>No bills raised by you.</Text>
                     </View>
+                  ) : (
+                    <FlatList
+                      data={tenantBills}
+                      keyExtractor={(m: any) => m.id}
+                      nestedScrollEnabled={true}
+                      contentContainerStyle={{ paddingBottom: 120 + insets.bottom }}
+                      renderItem={({ item }) => (
+                        <TouchableOpacity
+                          style={styles.maintCard}
+                          onPress={() => {
+                            try {
+                              const st = String(item.status || '').toLowerCase();
+                              if (st === 'payment_pending' || st === 'payment-pending') {
+                                setVerifyBill(item);
+                                setShowVerifyModal(true);
+                              }
+                            } catch (e) {}
+                          }}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontWeight: '700' }}>{item.title}</Text>
+                            <Text style={{ color: '#666' }}>{item.description}</Text>
+                          </View>
+                          <View style={{ alignItems: 'flex-end' }}>
+                            <Text>₹{item.cost}</Text>
+                            <Text
+                              style={{
+                                color:
+                                  String(item.status).toLowerCase() === 'payment_pending' ||
+                                  String(item.status).toLowerCase() === 'payment-pending'
+                                    ? '#e67e22'
+                                    : String(item.status).toLowerCase() === 'closed'
+                                    ? '#2ecc71'
+                                    : '#6b7280',
+                              }}
+                            >
+                              {item.status}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      )}
+                    />
                   )}
-                />
+                </>
               )}
+
+              {/* Verify payment modal - owner can preview proof and mark as paid */}
+              <Modal visible={showVerifyModal} transparent animationType="slide">
+                <View style={styles.modalBackdrop}>
+                  <View style={[styles.modalContent, { maxHeight: 520 }]}>
+                    <Text style={{ fontWeight: '700', fontSize: 18, marginBottom: 8 }}>
+                      Verify Payment
+                    </Text>
+                    {verifyBill ? (
+                      <View>
+                        <Text style={{ fontWeight: '700' }}>{verifyBill.title}</Text>
+                        <Text style={{ color: '#666', marginBottom: 8 }}>
+                          {verifyBill.description}
+                        </Text>
+                        <Text style={{ marginBottom: 8 }}>Amount: ₹{verifyBill.cost}</Text>
+
+                        {verifyBill.payment_proof_url ? (
+                          <Image
+                            source={{ uri: verifyBill.payment_proof_url }}
+                            style={{
+                              width: '100%',
+                              height: 220,
+                              borderRadius: 8,
+                              marginBottom: 12,
+                            }}
+                            resizeMode="contain"
+                          />
+                        ) : (
+                          <View
+                            style={{ padding: 12, backgroundColor: '#f3f4f6', borderRadius: 8 }}
+                          >
+                            <Text style={{ color: '#666' }}>No proof attached.</Text>
+                          </View>
+                        )}
+
+                        <View
+                          style={{
+                            flexDirection: 'row',
+                            justifyContent: 'flex-end',
+                            marginTop: 12,
+                          }}
+                        >
+                          <TouchableOpacity
+                            style={[styles.smallBtn, { marginRight: 8 }]}
+                            onPress={() => {
+                              setShowVerifyModal(false);
+                              setVerifyBill(null);
+                            }}
+                            disabled={verifying}
+                          >
+                            <Text style={{ color: '#fff' }}>Cancel</Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={styles.smallBtn}
+                            onPress={async () => {
+                              if (!verifyBill) return;
+                              try {
+                                setVerifying(true);
+                                const r = await api.post(
+                                  `/api/owner/bills/${verifyBill.id}/verify`,
+                                  {
+                                    action: 'approve',
+                                  }
+                                );
+                                const updated =
+                                  r.data && (r.data.bill || r.data.updatedBill || r.data.updated);
+                                if (updated) {
+                                  setTenantBills((s) =>
+                                    (s || []).map((it: any) =>
+                                      it.id === updated.id ? updated : it
+                                    )
+                                  );
+                                }
+                                setShowVerifyModal(false);
+                                setVerifyBill(null);
+                                alert('Bill marked as paid');
+                              } catch (e) {
+                                console.warn('verify approve failed', e);
+                                alert('Failed to verify bill');
+                              } finally {
+                                setVerifying(false);
+                              }
+                            }}
+                            disabled={verifying}
+                          >
+                            {verifying ? (
+                              <ActivityIndicator color="#fff" />
+                            ) : (
+                              <Text style={{ color: '#fff' }}>Mark as Paid</Text>
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              </Modal>
             </View>
           )}
 
@@ -2022,6 +2372,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               <Text style={{ fontWeight: '700', fontSize: 18, marginBottom: 8 }}>
                 {editingReadOnly ? 'View Tenant' : editingTenant?.id ? 'Edit Tenant' : 'Add Tenant'}
               </Text>
+
               <Text style={styles.label}>
                 Full name <Text style={{ color: '#d00' }}>*</Text>
               </Text>
@@ -2031,6 +2382,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 onChangeText={(t) => setEditingTenant((s: any) => ({ ...s, name: t }))}
                 editable={!editingReadOnly}
               />
+
               <Text style={styles.label}>
                 Mobile <Text style={{ color: '#d00' }}>*</Text>
               </Text>
@@ -2048,6 +2400,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               {editingPhoneError ? (
                 <Text style={styles.inlineError}>{editingPhoneError}</Text>
               ) : null}
+
               <Text style={styles.label}>
                 Address <Text style={{ color: '#d00' }}>*</Text>
               </Text>
@@ -2057,6 +2410,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 onChangeText={(t) => setEditingTenant((s: any) => ({ ...s, address: t }))}
                 editable={!editingReadOnly}
               />
+
               <Text style={styles.label}>
                 Gender <Text style={{ color: '#d00' }}>*</Text>
               </Text>
@@ -2077,6 +2431,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   );
                 })}
               </View>
+
               <Text style={styles.label}>Family members</Text>
               <View style={{ marginBottom: 8 }}>
                 {(editingTenant?.family || []).map((f: any, idx: number) => (
@@ -2088,13 +2443,13 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                     <TextInput
                       style={[styles.input, { flex: 1 }]}
                       value={f.name}
-                      onChangeText={(val) =>
+                      onChangeText={(val) => {
                         setEditingTenant((s: any) => {
                           const fam = (s.family || []).slice();
                           fam[idx] = { name: val };
                           return { ...s, family: fam };
-                        })
-                      }
+                        });
+                      }}
                       editable={!editingReadOnly}
                       placeholder="Full name"
                     />
@@ -2114,10 +2469,8 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                     <Text style={{ marginLeft: 8, color: '#6C5CE7' }}>Add member</Text>
                   </TouchableOpacity>
                 )}
-                {editingReadOnly && (editingTenant?.family || []).length === 0 ? (
-                  <Text style={{ color: '#666', marginTop: 6 }}>No family members</Text>
-                ) : null}
               </View>
+
               <Text style={styles.label}>
                 Move-in date <Text style={{ color: '#d00' }}>*</Text>
               </Text>
@@ -2129,35 +2482,8 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   placeholder="YYYY-MM-DD"
                   editable={!editingReadOnly}
                 />
-                <TouchableOpacity
-                  style={styles.calendarIcon}
-                  onPress={() => {
-                    if (editingReadOnly) return;
-                    const d = editingTenant?.moveIn ? new Date(editingTenant.moveIn) : new Date();
-                    setCalendarMonth(d.getMonth());
-                    setCalendarYear(d.getFullYear());
-                    setDatePickerField('moveIn');
-                    setShowDatePicker(true);
-                  }}
-                >
-                  <Ionicons name="calendar" size={20} color="#333" />
-                </TouchableOpacity>
               </View>
 
-              {/* Move-out date removed as per design */}
-              {/* Date picker (conditionally rendered if library is present) */}
-              {renderDatePicker() || renderInlineCalendar()}
-              <Text style={styles.label}>
-                Rent amount <Text style={{ color: '#d00' }}>*</Text>
-              </Text>
-              <TextInput
-                style={styles.input}
-                value={String(editingTenant?.rent || '')}
-                onChangeText={(t) => setEditingTenant((s: any) => ({ ...s, rent: Number(t) }))}
-                keyboardType="numeric"
-                editable={!editingReadOnly}
-              />
-              <Text style={styles.label}>Assign to Flat</Text>
               <View style={{ marginBottom: 8 }}>
                 <View
                   style={{
@@ -2180,6 +2506,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   />
                 </View>
               </View>
+
               <Text style={styles.label}>
                 Deposit amount <Text style={{ color: '#d00' }}>*</Text>
               </Text>
@@ -2190,6 +2517,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 keyboardType="numeric"
                 editable={!editingReadOnly}
               />
+
               <Text style={[styles.label, { marginTop: 10 }]}>Witness 1</Text>
               <TextInput
                 style={styles.input}
@@ -2198,6 +2526,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 editable={!editingReadOnly}
                 placeholder="Name & contact"
               />
+
               <Text style={[styles.label, { marginTop: 8 }]}>Witness 2</Text>
               <TextInput
                 style={styles.input}
@@ -2206,13 +2535,14 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 editable={!editingReadOnly}
                 placeholder="Name & contact"
               />
+
               <Text style={{ color: '#666', fontSize: 12, marginTop: 6 }}>
                 please verify with witness if he knows the tenant personally.
               </Text>
+
               {/* Aadhaar / PAN uploads for tenant (owner can attach documents that tenant can view) */}
               <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Identity Documents</Text>
               <View style={{ flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 8 }}>
-                {/* Aadhaar */}
                 <View
                   style={{
                     flex: 1,
@@ -2254,7 +2584,6 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   </View>
                 </View>
 
-                {/* PAN */}
                 <View
                   style={{
                     flex: 1,
@@ -2299,148 +2628,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   </View>
                 </View>
               </View>
-              {/* Tenant history: agreements & documents (owner-scoped) */}
-              {editingTenant?.history && (
-                <>
-                  <Text style={[styles.sectionTitle, { marginTop: 12 }]}>History Documents</Text>
-                  <View style={{ marginBottom: 8 }}>
-                    {(() => {
-                      // Only show documents that were uploaded by the current owner
-                      const docs = Array.isArray(editingTenant.history?.documents)
-                        ? editingTenant.history.documents
-                        : [];
-                      const ownerId = user && (user.id || user.userId || user._id);
-                      const tenantId = editingTenant && (editingTenant.id || editingTenant._id);
-                      // Show documents uploaded by the owner OR documents associated with this tenant
-                      const visibleDocs = docs.filter((d: any) => {
-                        if (!d) return false;
-                        const upl = d.uploaded_by || d.uploadedBy || d.uploadedById || null;
-                        return (
-                          (ownerId && String(upl) === String(ownerId)) ||
-                          (tenantId && String(upl) === String(tenantId))
-                        );
-                      });
 
-                      if (visibleDocs.length === 0) {
-                        return (
-                          <View style={{ paddingVertical: 8 }}>
-                            <Text style={{ color: '#666' }}>No history documents uploaded.</Text>
-                          </View>
-                        );
-                      }
-
-                      return visibleDocs.map((item: any) => (
-                        <View
-                          key={item.id}
-                          style={{
-                            paddingVertical: 6,
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                          }}
-                        >
-                          <View>
-                            <Text>{item.title || item.name || 'Document'}</Text>
-                            <Text style={styles.tenantMeta}>{item.createdAt || ''}</Text>
-                          </View>
-
-                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            {item.file_url ? (
-                              <TouchableOpacity
-                                onPress={() => {
-                                  try {
-                                    const title = String(
-                                      item.title || item.name || item.file_url || ''
-                                    );
-                                    const isAgreement = /agreement|rent[-_ ]?agreement/i.test(
-                                      title
-                                    );
-                                    if (isAgreement) {
-                                      downloadAgreement(item.file_url);
-                                    } else {
-                                      handlePreview(item.file_url);
-                                    }
-                                  } catch (e) {
-                                    try {
-                                      handlePreview(item.file_url);
-                                    } catch (ee) {}
-                                  }
-                                }}
-                                style={{ padding: 6 }}
-                              >
-                                <Ionicons name="eye-outline" size={18} color="#374151" />
-                              </TouchableOpacity>
-                            ) : null}
-
-                            {!editingReadOnly && item.file_url ? (
-                              <TouchableOpacity
-                                style={{ padding: 6, marginLeft: 8 }}
-                                accessibilityRole="button"
-                                onPress={async () => {
-                                  try {
-                                    let confirmed = false;
-                                    if (
-                                      Platform.OS === 'web' &&
-                                      typeof window !== 'undefined' &&
-                                      window.confirm
-                                    ) {
-                                      confirmed = window.confirm(
-                                        'Are you sure you want to delete this document?'
-                                      );
-                                    } else {
-                                      await new Promise<void>((resolve) => {
-                                        Alert.alert(
-                                          'Delete document',
-                                          'Are you sure you want to delete this document?',
-                                          [
-                                            {
-                                              text: 'Cancel',
-                                              style: 'cancel',
-                                              onPress: () => resolve(),
-                                            },
-                                            {
-                                              text: 'Delete',
-                                              style: 'destructive',
-                                              onPress: () => {
-                                                (confirmed as any) = true;
-                                                resolve();
-                                              },
-                                            },
-                                          ]
-                                        );
-                                      });
-                                    }
-                                    if (!confirmed) return;
-                                    setDeletingDocId(item.id);
-                                    await api.delete(`/api/owner/documents/${item.id}`);
-                                    try {
-                                      const r = await api.get(
-                                        `/api/owner/tenants/${editingTenant.id}/history`
-                                      );
-                                      setEditingTenant((s: any) => ({ ...s, history: r.data }));
-                                    } catch (e) {}
-                                  } catch (e) {
-                                    console.warn('delete document failed', e);
-                                    Alert.alert('Delete failed');
-                                  } finally {
-                                    setDeletingDocId(null);
-                                  }
-                                }}
-                              >
-                                {deletingDocId === item.id ? (
-                                  <ActivityIndicator size="small" color="#dc2626" />
-                                ) : (
-                                  <Ionicons name="trash-outline" size={18} color="#dc2626" />
-                                )}
-                              </TouchableOpacity>
-                            ) : null}
-                          </View>
-                        </View>
-                      ));
-                    })()}
-                  </View>
-                </>
-              )}
               <View style={{ height: 12 }} />
               <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
                 <TouchableOpacity
@@ -3261,7 +3449,9 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
         <View style={styles.modalBackdrop}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Create Bill</Text>
-            <Text style={styles.label}>Select Tenant</Text>
+            <Text style={styles.label}>
+              Select Tenant <Text style={{ color: '#d00' }}>*</Text>
+            </Text>
             <View style={{ marginBottom: 8 }}>
               <View
                 style={{
@@ -3275,6 +3465,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                   flats={tenants.map((t) => ({ id: t.id, flat_no: t.name }))}
                   value={ownerBillForm.tenantId}
                   onChange={(id: any) => setOwnerBillForm((s) => ({ ...s, tenantId: id }))}
+                  placeholder="Select tenant (required)"
                 />
               </View>
             </View>
@@ -3311,6 +3502,10 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                 style={[styles.smallBtn, { marginRight: 8 }]}
                 onPress={async () => {
                   try {
+                    if (!ownerBillForm.tenantId) {
+                      Alert.alert('Validation', 'Please select a tenant before creating a bill');
+                      return;
+                    }
                     const payload: any = {
                       title:
                         ownerBillForm.type === 'rent'
@@ -3321,7 +3516,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                       type: ownerBillForm.type || 'other',
                       description: ownerBillForm.description,
                       cost: Number(ownerBillForm.amount) || 0,
-                      tenantId: ownerBillForm.tenantId || undefined,
+                      tenantId: ownerBillForm.tenantId,
                       date: new Date().toISOString().slice(0, 10),
                       status: 'pending',
                     };
@@ -3361,9 +3556,10 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 // (uploadPropertyDocAs is implemented inside the component so it can access state setters)
 
 // Small picker-like dropdown implemented using TouchableOpacity + modal for simplicity
-function PickerLike({ flats, value, onChange, disabled }: any) {
+function PickerLike({ flats, value, onChange, disabled, placeholder }: any) {
   const [open, setOpen] = useState(false);
   const selected = flats.find((f: any) => f.id === value);
+  const hint = placeholder || 'Select flat (optional)';
   return (
     <>
       <TouchableOpacity
@@ -3373,7 +3569,7 @@ function PickerLike({ flats, value, onChange, disabled }: any) {
         }}
         style={{ padding: 10, backgroundColor: '#fff' }}
       >
-        <Text>{selected ? `${selected.flat_no}` : 'Select flat (optional)'} </Text>
+        <Text>{selected ? `${selected.flat_no}` : hint} </Text>
       </TouchableOpacity>
       <Modal visible={open} transparent animationType="slide">
         <View

@@ -1,5 +1,6 @@
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+// Use legacy file-system API to keep readAsStringAsync and EncodingType available
+import * as FileSystem from 'expo-file-system/legacy';
 
 // Compatibility shim for expo-file-system API surface changes
 const _FS: any = FileSystem as any;

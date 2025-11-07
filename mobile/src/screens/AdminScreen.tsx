@@ -22,9 +22,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import api from '../services/api';
+import { defaultBaseUrl } from '../services/config';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomTabContext } from '../contexts/BottomTabContext';
-import * as FileSystem from 'expo-file-system';
+// Use legacy expo-file-system API for compatibility with readAsStringAsync usage
+import * as FileSystem from 'expo-file-system/legacy';
 import ProfileCard from '../components/ProfileCard';
 import pickAndUploadProfile, {
   pickAndUploadFile as sharedPickAndUploadFile,
@@ -156,6 +158,9 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
   // Image preview modal state (show images in-app instead of opening external window)
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+
+  // Proof overview modal state: when Actions -> View proofs is selected
+  const [proofOverview, setProofOverview] = useState<null | { owner: any; proofs: any[] }>(null);
 
   // UI state: which wing cards are expanded (show flats/users)
   const [expandedWings, setExpandedWings] = useState<Record<string, boolean>>({});
@@ -1521,47 +1526,37 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                           <TouchableOpacity
                             style={[styles.smallBtn]}
                             onPress={() => {
-                              Alert.alert(
-                                item.name || 'Owner',
-                                `${item.bills?.length || 0} bills\nUnpaid: ₹${
-                                  item.unpaidAmount || 0
-                                }`,
-                                [
-                                  { text: 'Close' },
-                                  {
-                                    text: 'Mark all Paid',
-                                    onPress: async () => {
-                                      for (const b of item.bills || []) {
-                                        if ((b.status || '') !== 'closed') {
-                                          await adminVerifyBill(b.id, 'approve');
-                                        }
-                                      }
-                                      fetchMaintenanceFees(maintenanceMonth || undefined, 'all');
-                                    },
-                                  },
-                                ]
-                              );
+                              // Open the Verify Payment modal directly with proofs for this owner
+                              const raw = (item.bills || []).slice();
+                              const base =
+                                (api.defaults && (api.defaults as any).baseURL) || defaultBaseUrl();
+                              const proofs = raw
+                                .map((x: any) => {
+                                  const url =
+                                    x.payment_proof_url || x.file_url || x.proof_url || x.url;
+                                  if (!url) return null;
+                                  const resolved = /^https?:\/\//i.test(String(url))
+                                    ? String(url)
+                                    : `${String(base).replace(/\/$/, '')}/${String(url).replace(
+                                        /^\//,
+                                        ''
+                                      )}`;
+                                  return {
+                                    id: x.id || x._id || x.billId,
+                                    title: x.title || x.name || 'Maintenance',
+                                    description: x.description || '',
+                                    cost: x.cost || x.amount || 0,
+                                    payment_proof_url: resolved,
+                                    raw: x,
+                                  };
+                                })
+                                .filter(Boolean) as any[];
+
+                              // Set the proofOverview state so the existing Verify Payment modal appears
+                              setProofOverview({ owner: item, proofs });
                             }}
                           >
                             <Text style={{ color: '#fff' }}>Actions</Text>
-                          </TouchableOpacity>
-                          <View style={{ height: 6 }} />
-                          <TouchableOpacity
-                            style={styles.smallBtnClose}
-                            onPress={() => {
-                              const firstProof = (item.bills || []).find(
-                                (x: any) => x.payment_proof_url
-                              );
-                              if (firstProof && firstProof.payment_proof_url) {
-                                try {
-                                  (require('react-native').Linking as any).openURL(
-                                    firstProof.payment_proof_url
-                                  );
-                                } catch (e) {}
-                              } else Alert.alert('No proof available');
-                            }}
-                          >
-                            <Text style={{ color: '#374151' }}>View Proof</Text>
                           </TouchableOpacity>
                         </View>
                       </View>
@@ -2352,6 +2347,74 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                   />
                 </View>
               </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Proof overview modal: lists payment_proof_url items for an owner */}
+      <Modal visible={!!proofOverview} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContent, { maxHeight: 520 }]}>
+            <Text style={{ fontWeight: '700', fontSize: 18, marginBottom: 8 }}>Verify Payment</Text>
+            {(proofOverview?.proofs || []).length === 0 ? (
+              <View style={{ padding: 12 }}>
+                <Text style={{ color: '#666' }}>No proofs available.</Text>
+              </View>
+            ) : (
+              (() => {
+                const p = (proofOverview?.proofs || [])[0];
+                return (
+                  <View>
+                    <Text style={{ fontWeight: '700' }}>{p.title || 'Maintenance'}</Text>
+                    <Text style={{ color: '#666', marginBottom: 8 }}>{p.description || ''}</Text>
+                    <Text style={{ marginBottom: 8 }}>Amount: ₹{p.cost || ''}</Text>
+
+                    {p.payment_proof_url ? (
+                      <Image
+                        source={{ uri: String(p.payment_proof_url) } as any}
+                        style={{ width: '100%', height: 220, borderRadius: 8, marginBottom: 12 }}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={{ padding: 12, backgroundColor: '#f3f4f6', borderRadius: 8 }}>
+                        <Text style={{ color: '#666' }}>No proof attached.</Text>
+                      </View>
+                    )}
+
+                    <View
+                      style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}
+                    >
+                      <TouchableOpacity
+                        style={[styles.smallBtn, { marginRight: 8 }]}
+                        onPress={() => setProofOverview(null)}
+                      >
+                        <Text style={{ color: '#fff' }}>Cancel</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.smallBtn}
+                        onPress={async () => {
+                          try {
+                            const billId = p && (p.id || p.billId || p._id);
+                            if (!billId) throw new Error('bill id not found');
+                            await adminVerifyBill(String(billId), 'approve');
+                            // refresh list
+                            fetchMaintenanceFees(maintenanceMonth || undefined, 'all');
+                            setProofOverview(null);
+                            Alert.alert('Bill marked as paid');
+                          } catch (e) {
+                            console.warn('admin mark paid failed', e);
+                            Alert.alert('Failed to mark as paid');
+                          }
+                        }}
+                      >
+                        <Text style={{ color: '#fff' }}>Mark as Paid</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })()
             )}
           </View>
         </View>
