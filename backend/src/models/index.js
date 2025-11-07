@@ -1,8 +1,20 @@
 const { Sequelize } = require('sequelize');
 
 let sequelize;
-// If Postgres env vars are provided, use Postgres. Otherwise fall back to a local sqlite DB for dev.
-if (process.env.DB_NAME && process.env.DB_USER) {
+// Prefer DATABASE_URL when present (convenient for Render / managed DBs)
+if (process.env.DATABASE_URL) {
+  // Support optional DB SSL mode via DB_SSL=true
+  const dialectOptions = {};
+  if (process.env.DB_SSL === 'true') {
+    dialectOptions.ssl = { rejectUnauthorized: false };
+  }
+  sequelize = new Sequelize(process.env.DATABASE_URL, {
+    dialect: 'postgres',
+    logging: false,
+    dialectOptions,
+  });
+} else if (process.env.DB_NAME && process.env.DB_USER) {
+  // If Postgres env vars are provided, use Postgres. Otherwise fall back to a local sqlite DB for dev.
   sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASS, {
     host: process.env.DB_HOST,
     port: process.env.DB_PORT || 5432,
