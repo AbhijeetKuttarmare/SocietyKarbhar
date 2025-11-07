@@ -16,7 +16,13 @@ type Props = {
   setUser?: (u?: any) => void;
 };
 
-export default function AdminProfile({ user, onLogout, userAvatar, setUserAvatar, setUser }: Props) {
+export default function AdminProfile({
+  user,
+  onLogout,
+  userAvatar,
+  setUserAvatar,
+  setUser,
+}: Props) {
   const [profile, setProfile] = useState<any>(user || {});
 
   useEffect(() => {
@@ -59,7 +65,12 @@ export default function AdminProfile({ user, onLogout, userAvatar, setUserAvatar
       // If avatar is a local URI (not a remote http(s) URL or data:), upload it via multipart to /api/user/avatar
       const avatarVal = profile?.avatar;
       let uploadedUser: any = null;
-      if (avatarVal && typeof avatarVal === 'string' && !/^https?:\/\//i.test(avatarVal) && !/^data:/i.test(avatarVal)) {
+      if (
+        avatarVal &&
+        typeof avatarVal === 'string' &&
+        !/^https?:\/\//i.test(avatarVal) &&
+        !/^data:/i.test(avatarVal)
+      ) {
         try {
           const formData: any = new FormData();
           if (Platform.OS === 'web') {
@@ -73,13 +84,18 @@ export default function AdminProfile({ user, onLogout, userAvatar, setUserAvatar
               formData.append('file', blob, avatarVal.split('/').pop() || 'photo.jpg');
             } catch (e) {
               // fallback to legacy object if blob conversion fails
-              formData.append('file', { uri: avatarVal, name: avatarVal.split('/').pop() || 'photo.jpg' } as any);
+              formData.append('file', {
+                uri: avatarVal,
+                name: avatarVal.split('/').pop() || 'photo.jpg',
+              } as any);
             }
           }
 
           const token = await (async () => {
             try {
-              return await (await import('@react-native-async-storage/async-storage')).default.getItem('token');
+              return await (
+                await import('@react-native-async-storage/async-storage')
+              ).default.getItem('token');
             } catch (e) {
               return null;
             }

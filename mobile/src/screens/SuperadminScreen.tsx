@@ -598,8 +598,19 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                   <TouchableOpacity
                     style={styles.addBtn}
                     onPress={() => {
-                      setModalVisible(true);
+                      // Clear form explicitly when opening Add modal so previous
+                      // values are not shown.
                       setEditingSociety(null);
+                      setForm({
+                        name: '',
+                        country: '',
+                        city: '',
+                        area: '',
+                        mobile_number: '',
+                        builder_name: '',
+                        image_url: '',
+                      });
+                      setModalVisible(true);
                     }}
                   >
                     <Text style={styles.addBtnText}>＋ Add Society</Text>
@@ -1115,6 +1126,16 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                   onPress={() => {
                     setModalVisible(false);
                     setEditingSociety(null);
+                    // Clear form on cancel so subsequent Add starts blank
+                    setForm({
+                      name: '',
+                      country: '',
+                      city: '',
+                      area: '',
+                      mobile_number: '',
+                      builder_name: '',
+                      image_url: '',
+                    });
                   }}
                 >
                   <Text style={styles.modalBtnText}>Cancel</Text>

@@ -89,14 +89,17 @@ export default function App() {
               const role = user?.role;
               if (role === 'superadmin')
                 return <SuperadminScreen user={user} onLogout={handleLogout} />;
-              if (role === 'admin') return <AdminScreen user={user} onLogout={handleLogout} setUser={setUser} />;
+              if (role === 'admin')
+                return <AdminScreen user={user} onLogout={handleLogout} setUser={setUser} />;
               if (role === 'owner') return <OwnerScreen user={user} onLogout={handleLogout} />;
               if (role === 'tenant') return <TenantScreen user={user} onLogout={handleLogout} />;
               return <TenantScreen user={user} onLogout={handleLogout} />;
             })()
           )}
-          {/* Global bottom tab - fixed across all screens. Render only when user is logged in */}
-          {user ? <BottomTabWrapper user={user} /> : null}
+      {/* Global bottom tab - fixed across all screens. Owner has an inline bottom bar
+        inside OwnerScreen, so avoid rendering the global bar for owners to prevent
+        duplicate / overlapping tabs. */}
+      {user && user.role !== 'owner' ? <BottomTabWrapper user={user} /> : null}
         </SafeAreaView>
       </BottomTabProvider>
     </SafeAreaProvider>

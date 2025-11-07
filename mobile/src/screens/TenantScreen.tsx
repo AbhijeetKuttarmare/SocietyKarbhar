@@ -280,6 +280,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
   // maintenance helpers (lightweight placeholders)
   const [maintenanceForm, setMaintenanceForm] = useState({ title: '', description: '', image: '' });
   const [proofUri, setProofUri] = useState<string | null>(null);
+  const [uploadingProof, setUploadingProof] = useState<boolean>(false);
 
   async function fetchMaintenance() {
     try {
@@ -355,57 +356,10 @@ export default function TenantScreen({ user, onLogout }: Props) {
   }
 
   // small render helpers
-  const StatCard = ({ title, value, icon, onPress }: any) => {
+  const StatCard = ({ title, value, onPress }: any) => {
     const Content = (
       <View style={styles.statCard}>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <View style={styles.iconCircle}>
-            <Ionicons name={icon || 'wallet'} size={18} color="#fff" />
-          </View>
-          <Text style={styles.statTitle}>{title}</Text>
-        </View>
-
-        {/* Inline preview overlay for Tenant profile */}
-        {showPreviewModal && (
-          <View
-            style={{
-              position: 'absolute',
-              top: 12,
-              left: 12,
-              right: 12,
-              bottom: 12,
-              backgroundColor: 'rgba(0,0,0,0.85)',
-              alignItems: 'center',
-              justifyContent: 'center',
-              zIndex: 9999,
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            {previewImageUrl ? (
-              <Image
-                source={{ uri: previewImageUrl }}
-                style={{
-                  width: '100%',
-                  height: '80%',
-                  resizeMode: 'contain',
-                  backgroundColor: '#000',
-                }}
-              />
-            ) : (
-              <Text style={{ color: '#fff' }}>No preview available</Text>
-            )}
-            <View style={{ marginTop: 8 }}>
-              <Button
-                title="Close"
-                onPress={() => {
-                  setShowPreviewModal(false);
-                  setPreviewImageUrl(null);
-                }}
-              />
-            </View>
-          </View>
-        )}
+        <Text style={styles.statTitle}>{title}</Text>
         <Text style={styles.statValue}>{value}</Text>
       </View>
     );
@@ -465,7 +419,15 @@ export default function TenantScreen({ user, onLogout }: Props) {
       } else if (k === 'home' || k === 'profile' || k === 'maintenance' || k === 'bills') {
         setShowOwnerDashboard(false);
         setTab(
-          k === 'home' ? 'home' : k === 'profile' ? 'profile' : k === 'bills' ? 'rent' : 'home'
+          k === 'home'
+            ? 'home'
+            : k === 'profile'
+            ? 'profile'
+            : k === 'bills'
+            ? 'rent'
+            : k === 'maintenance'
+            ? 'maintenance'
+            : 'home'
         );
       }
     } catch (e) {}
@@ -1227,21 +1189,65 @@ export default function TenantScreen({ user, onLogout }: Props) {
                     {selectedBill ? `${selectedBill.title} • ₹${selectedBill.cost}` : ''}
                   </Text>
                   <View style={{ marginBottom: 8 }}>
-                    <Button
-                      title={proofUri ? 'Change Proof' : 'Attach Payment Proof'}
-                      onPress={async () => {
-                        try {
-                          // pick and upload immediately; store resulting URL
-                          const url = await pickAndUploadFile({
-                            accept: 'image/*',
-                            fallbackApiPath: '/api/tenant/upload',
-                          });
-                          if (url) setProofUri(url);
-                        } catch (e) {
-                          console.warn('pick proof failed', e);
-                        }
-                      }}
-                    />
+                    <View style={{ alignItems: 'center' }}>
+                      {uploadingProof ? (
+                        <ActivityIndicator size="small" />
+                      ) : proofUri ? (
+                        <View style={{ alignItems: 'center' }}>
+                          <Image
+                            source={{ uri: proofUri }}
+                            style={{
+                              width: 220,
+                              height: 160,
+                              resizeMode: 'cover',
+                              borderRadius: 8,
+                            }}
+                          />
+                          <View style={{ flexDirection: 'row', marginTop: 8 }}>
+                            <TouchableOpacity
+                              onPress={async () => {
+                                try {
+                                  setUploadingProof(true);
+                                  const url = await pickAndUploadProfile();
+                                  if (url) setProofUri(url);
+                                } catch (e) {
+                                  console.warn('pick proof failed (profile picker)', e);
+                                  alert('Upload failed');
+                                } finally {
+                                  setUploadingProof(false);
+                                }
+                              }}
+                              style={[styles.smallBtn, { marginRight: 8 }]}
+                            >
+                              <Text style={{ color: '#fff' }}>Change</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              onPress={() => setProofUri(null)}
+                              style={[styles.smallBtn, { backgroundColor: '#ef4444' }]}
+                            >
+                              <Text style={{ color: '#fff' }}>Remove</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ) : (
+                        <Button
+                          title={proofUri ? 'Change Proof' : 'Attach Payment Proof'}
+                          onPress={async () => {
+                            try {
+                              setUploadingProof(true);
+                              // pick and upload immediately; store resulting URL
+                              const url = await pickAndUploadProfile();
+                              if (url) setProofUri(url);
+                            } catch (e) {
+                              console.warn('pick proof failed (profile picker)', e);
+                              alert('Upload failed');
+                            } finally {
+                              setUploadingProof(false);
+                            }
+                          }}
+                        />
+                      )}
+                    </View>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
                     <Button
@@ -1526,15 +1532,15 @@ const styles: any = StyleSheet.create({
   statValue: { fontWeight: '800', fontSize: 18, marginTop: 6 },
   section: { marginTop: 12, backgroundColor: 'transparent' },
   sectionTitle: { fontWeight: '800', marginBottom: 8 },
-  actionRow: { flexDirection: 'row', flexWrap: 'wrap' },
+  actionRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap' },
   actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     backgroundColor: palette.primary,
     borderRadius: 12,
-    marginRight: 8,
-    marginBottom: 8,
+    marginRight: 12,
     elevation: 2,
     shadowColor: '#000',
     shadowOpacity: 0.04,

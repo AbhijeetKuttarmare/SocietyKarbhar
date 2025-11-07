@@ -68,8 +68,14 @@ router.put('/', authenticate, async (req, res) => {
     try {
       await u.update(payload);
     } catch (dbErr) {
-      console.error('[user] update failed to save to DB', dbErr && dbErr.message, dbErr && dbErr.stack);
-      return res.status(500).json({ error: 'failed_to_update_user', detail: dbErr && dbErr.message });
+      console.error(
+        '[user] update failed to save to DB',
+        dbErr && dbErr.message,
+        dbErr && dbErr.stack
+      );
+      return res
+        .status(500)
+        .json({ error: 'failed_to_update_user', detail: dbErr && dbErr.message });
     }
 
     // return an enriched user (same shape as GET /me) so clients get the up-to-date representation
