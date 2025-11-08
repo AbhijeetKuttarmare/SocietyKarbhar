@@ -14,7 +14,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/society-karbhar-logo.png",
         "backgroundColor": "#6D28D9"
-      }
+      },
+      "package": "com.neemanrao.societykarbharmobile"
     },
     "web": {
       "bundler": "metro",
@@ -27,7 +28,10 @@
       "backgroundColor": "#6D28D9"
     },
     "extra": {
-      "API_BASE_URL": "http://192.168.1.5:4001"
+      "API_BASE_URL": "https://societykarbhar.onrender.com",
+      "eas": {
+        "projectId": "19573cc3-ce24-481c-b47b-1166b2a534f3"
+      }
     }
   }
 }
