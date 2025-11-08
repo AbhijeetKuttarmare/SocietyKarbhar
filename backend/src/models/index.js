@@ -46,6 +46,7 @@ db.SubscriptionPlan = require('./subscriptionPlan')(sequelize);
 db.SuperadminLog = require('./superadminLog')(sequelize);
 db.AdminSociety = require('./adminSociety')(sequelize);
 db.Helpline = require('./helpline')(sequelize);
+db.Staff = require('./staff')(sequelize);
 
 // Associations
 db.Society.hasMany(db.Flat, { foreignKey: 'societyId' });

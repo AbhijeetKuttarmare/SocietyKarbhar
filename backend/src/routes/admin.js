@@ -570,6 +570,83 @@ router.delete('/helplines/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// Staff management (create/list/update/delete)
+router.get('/staff', async (req, res) => {
+  try {
+    const Staff = require('../models').Staff;
+    const staff = await Staff.findAll({ where: { societyId: req.user.societyId } });
+    res.json({ staff });
+  } catch (e) {
+    console.error('list staff failed', e && e.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+router.post('/staff', async (req, res) => {
+  try {
+    const Staff = require('../models').Staff;
+    const { name, staffType, phone, wingId, status } = req.body;
+    if (!name) return res.status(400).json({ error: 'name required' });
+    const s = await Staff.create({
+      name,
+      staffType: staffType || null,
+      phone: phone || null,
+      wingId: wingId || null,
+      status: status || 'active',
+      societyId: req.user.societyId,
+    });
+    await SuperadminLog.create({
+      user_id: req.user.id,
+      action_type: 'staff_created',
+      details: { staffId: s.id, name: s.name },
+    });
+    res.json({ staff: s });
+  } catch (e) {
+    console.error('create staff failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+router.put('/staff/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const Staff = require('../models').Staff;
+    const s = await Staff.findByPk(id);
+    if (!s || s.societyId !== req.user.societyId)
+      return res.status(404).json({ error: 'not found' });
+    await s.update(req.body);
+    await SuperadminLog.create({
+      user_id: req.user.id,
+      action_type: 'staff_updated',
+      details: { staffId: s.id, changes: req.body },
+    });
+    res.json({ staff: s });
+  } catch (e) {
+    console.error('update staff failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+router.delete('/staff/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const Staff = require('../models').Staff;
+    const s = await Staff.findByPk(id);
+    if (!s || s.societyId !== req.user.societyId)
+      return res.status(404).json({ error: 'not found' });
+    await s.destroy();
+    await SuperadminLog.create({
+      user_id: req.user.id,
+      action_type: 'staff_deleted',
+      details: { staffId: id },
+    });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('delete staff failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
 // Dashboard summary
 router.get('/summary', async (req, res) => {
   const totalOwners = await User.count({ where: { societyId: req.user.societyId, role: 'owner' } });

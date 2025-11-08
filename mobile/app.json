@@ -8,14 +8,18 @@
     "scheme": "societykarbhar",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/society-karbhar-logo.png",
         "backgroundColor": "#6D28D9"
       },
-      "package": "com.neemanrao.societykarbharmobile"
+      "package": "com.neemanrao.societykarbharmobile",
+      "runtimeVersion": "1.0.0"
     },
     "web": {
       "bundler": "metro",
@@ -28,10 +32,14 @@
       "backgroundColor": "#6D28D9"
     },
     "extra": {
-      "API_BASE_URL": "https://societykarbhar.onrender.com",
+      "API_BASE_URL": "http://192.168.1.5:4001",
       "eas": {
         "projectId": "19573cc3-ce24-481c-b47b-1166b2a534f3"
       }
+    },
+    "owner": "neemanrao",
+    "updates": {
+      "url": "https://u.expo.dev/19573cc3-ce24-481c-b47b-1166b2a534f3"
     }
   }
 }

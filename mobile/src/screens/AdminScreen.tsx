@@ -32,6 +32,7 @@ import pickAndUploadProfile, {
   pickAndUploadFile as sharedPickAndUploadFile,
 } from '../services/uploadProfile';
 import AdminProfile from './AdminProfile';
+import StaffManagement from './StaffManagement';
 
 // Responsive Admin Screen
 // - Preserves all API calls / logic from your original file
@@ -75,7 +76,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
   const [users, setUsers] = useState<any[]>([]);
   const [societies, setSocieties] = useState<any[]>([]);
   const [tab, setTab] = useState<
-    'dashboard' | 'helplines' | 'users' | 'notices' | 'maintenance' | 'profile'
+    'dashboard' | 'helplines' | 'users' | 'notices' | 'maintenance' | 'profile' | 'staff'
   >('dashboard');
   const [tab2, setTab2] = useState<'wings' | 'logs'>('wings');
   const [q, setQ] = useState('');
@@ -92,6 +93,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
   const [showAddWingModal, setShowAddWingModal] = useState(false);
   const [newWing, setNewWing] = useState({ name: '', number_of_floors: '1', flats_per_floor: '1' });
   const [showAssignModal, setShowAssignModal] = useState(false);
+  // navigate to staff tab instead of modal
   const [assignStep, setAssignStep] = useState(1);
   const [assignState, setAssignState] = useState({
     wingId: '',
@@ -117,6 +119,10 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
   const [showUserDetail, setShowUserDetail] = useState(false);
   const [detailUser, setDetailUser] = useState<any>(null);
   const [buildings, setBuildings] = useState<any[]>([]);
+  // Staff page controls
+  const [staffQuery, setStaffQuery] = useState('');
+  const [staffAddVisible, setStaffAddVisible] = useState(false);
+  const [staffRefreshKey, setStaffRefreshKey] = useState(0);
   // de-duplicate buildings client-side to avoid duplicate-key issues when backend returns
   // repeated entries. Keep original order and filter by unique id.
   const uniqueBuildings = React.useMemo(() => {
@@ -920,6 +926,10 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                   <Ionicons name="add" size={16} color="#fff" />
                   <Text style={styles.quickBtnText}>Add Helpline</Text>
                 </TouchableOpacity>
+                <TouchableOpacity style={styles.quickBtn} onPress={() => setTab('staff')}>
+                  <Ionicons name="person-add" size={16} color="#fff" />
+                  <Text style={styles.quickBtnText}>Add Staff</Text>
+                </TouchableOpacity>
                 <TouchableOpacity style={styles.quickBtn} onPress={() => setShowAddWingModal(true)}>
                   <Ionicons name="business" size={16} color="#fff" />
                   <Text style={styles.quickBtnText}>Add Wing</Text>
@@ -944,7 +954,63 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
         )}
 
         {/* MAIN AREA */}
-        <View style={styles.mainContent}>
+        {/* When admin selects Staff tab, render the Staff page immediately under the header
+            and collapse the normal mainContent so the staff UI starts at the top. */}
+        {tab === 'staff' && (
+          <View style={{ paddingVertical: 8 }}>
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                paddingHorizontal: isMobile ? 6 : 0,
+                marginBottom: 8,
+              }}
+            >
+              <Text style={styles.sectionTitle}>Staff</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <TouchableOpacity
+                  style={styles.smallBtn}
+                  onPress={() => {
+                    setStaffRefreshKey((k) => k + 1);
+                    fetchBuildings();
+                  }}
+                >
+                  <Text style={{ color: '#fff' }}>Refresh</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+            {/* Controls: search + add placed directly under header */}
+            <View style={{ paddingHorizontal: isMobile ? 6 : 0, marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <TextInput
+                  placeholder="Search staff by name, phone or type"
+                  value={staffQuery}
+                  onChangeText={setStaffQuery}
+                  style={[styles.input, { flex: 1, marginRight: 8 }]}
+                />
+                <TouchableOpacity
+                  style={[styles.smallBtn, { paddingHorizontal: 12, paddingVertical: 8 }]}
+                  onPress={() => setStaffAddVisible((s) => !s)}
+                >
+                  <Text style={{ color: '#fff' }}>{staffAddVisible ? 'Close' : 'Add'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+            <StaffManagement
+              buildings={uniqueBuildings}
+              hideControls={true}
+              externalQuery={staffQuery}
+              refreshKey={staffRefreshKey}
+              addVisible={staffAddVisible}
+              onAddToggle={setStaffAddVisible}
+            />
+          </View>
+        )}
+
+        <View
+          style={[styles.mainContent, tab === 'staff' ? { height: 0, overflow: 'hidden' } : {}]}
+        >
           {/* Header (desktop/tablet) */}
           {!isMobile && (
             <View style={styles.headerRow}>
@@ -1112,6 +1178,18 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                     >
                       <Ionicons name="business" size={16} />
                       <Text style={styles.actionBtnText}>Add Wing</Text>
+                    </TouchableOpacity>
+
+                    {/* Add Staff quick action - opens Staff page */}
+                    <TouchableOpacity
+                      style={[
+                        styles.actionBtn,
+                        isMobile && { width: '100%', justifyContent: 'center', marginBottom: 8 },
+                      ]}
+                      onPress={() => setTab('staff')}
+                    >
+                      <Ionicons name="person-add" size={16} />
+                      <Text style={styles.actionBtnText}>Add Staff</Text>
                     </TouchableOpacity>
 
                     {/* Add Owner/Tenant - restores quick action on Dashboard */}
@@ -1633,6 +1711,16 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                 >
                   <Ionicons name="add" size={16} color="#fff" />
                   <Text style={styles.quickBtnText}>Add Helpline</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.quickBtn}
+                  onPress={() => {
+                    setTab('staff');
+                    setShowSidebar(false);
+                  }}
+                >
+                  <Ionicons name="person-add" size={16} color="#fff" />
+                  <Text style={styles.quickBtnText}>Add Staff</Text>
                 </TouchableOpacity>
                 {/* Removed Add User from sidebar per UI preference */}
                 <TouchableOpacity
