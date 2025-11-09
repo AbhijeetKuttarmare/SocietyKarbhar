@@ -11,6 +11,7 @@ import SuperadminScreen from './src/screens/SuperadminScreen';
 import AdminScreen from './src/screens/AdminScreen';
 import OwnerScreen from './src/screens/OwnerScreen';
 import TenantScreen from './src/screens/TenantScreen';
+import SecurityGuardScreen from './src/screens/SecurityGuardScreen';
 import BottomTab from './src/components/BottomTab';
 import { BottomTabProvider, BottomTabContext } from './src/contexts/BottomTabContext';
 
@@ -91,15 +92,17 @@ export default function App() {
                 return <SuperadminScreen user={user} onLogout={handleLogout} />;
               if (role === 'admin')
                 return <AdminScreen user={user} onLogout={handleLogout} setUser={setUser} />;
+              if (role === 'security_guard')
+                return <SecurityGuardScreen user={user} onLogout={handleLogout} />;
               if (role === 'owner') return <OwnerScreen user={user} onLogout={handleLogout} />;
               if (role === 'tenant') return <TenantScreen user={user} onLogout={handleLogout} />;
               return <TenantScreen user={user} onLogout={handleLogout} />;
             })()
           )}
-      {/* Global bottom tab - fixed across all screens. Owner has an inline bottom bar
+          {/* Global bottom tab - fixed across all screens. Owner has an inline bottom bar
         inside OwnerScreen, so avoid rendering the global bar for owners to prevent
         duplicate / overlapping tabs. */}
-      {user && user.role !== 'owner' ? <BottomTabWrapper user={user} /> : null}
+          {user && user.role !== 'owner' ? <BottomTabWrapper user={user} /> : null}
         </SafeAreaView>
       </BottomTabProvider>
     </SafeAreaProvider>
@@ -122,6 +125,18 @@ function BottomTabWrapper({ user }: { user: any }) {
   } else {
     items.push({ key: 'home', label: 'Home', icon: 'home' });
     items.push({ key: 'helplines', label: 'Helplines', icon: 'call' });
+    // Role-specific tabs
+    if (user && user.role === 'security_guard') {
+      // override items for guard
+      items = [
+        { key: 'home', label: 'Home', icon: 'home' },
+        { key: 'scan', label: 'Scan', icon: 'qr-code' },
+        { key: 'inside', label: 'Inside', icon: 'list' },
+        { key: 'directory', label: 'Directory', icon: 'business' },
+        { key: 'profile', label: 'Profile', icon: 'person' },
+      ];
+      return <BottomTab activeKey={ctx.activeKey} onChange={ctx.setActiveKey} items={items} />;
+    }
     // Admin users get a dedicated 'Users' tab
     if (user && user.role === 'admin') {
       items.push({ key: 'users', label: 'Users', icon: 'people' });

@@ -33,6 +33,7 @@ import pickAndUploadProfile, {
 } from '../services/uploadProfile';
 import AdminProfile from './AdminProfile';
 import StaffManagement from './StaffManagement';
+import VisitorsScreen from './Admin/Visitors';
 
 // Responsive Admin Screen
 // - Preserves all API calls / logic from your original file
@@ -76,7 +77,14 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
   const [users, setUsers] = useState<any[]>([]);
   const [societies, setSocieties] = useState<any[]>([]);
   const [tab, setTab] = useState<
-    'dashboard' | 'helplines' | 'users' | 'notices' | 'maintenance' | 'profile' | 'staff'
+    | 'dashboard'
+    | 'helplines'
+    | 'users'
+    | 'notices'
+    | 'maintenance'
+    | 'profile'
+    | 'staff'
+    | 'visitors'
   >('dashboard');
   const [tab2, setTab2] = useState<'wings' | 'logs'>('wings');
   const [q, setQ] = useState('');
@@ -854,6 +862,15 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
             </Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {/* Visitor icon (opens Visitors tab) */}
+            <TouchableOpacity
+              style={styles.iconBtn}
+              accessible
+              accessibilityLabel="Visitors"
+              onPress={() => setTab('visitors')}
+            >
+              <Ionicons name="eye-outline" size={20} />
+            </TouchableOpacity>
             <TouchableOpacity style={styles.iconBtn}>
               <Ionicons name="notifications-outline" size={20} />
             </TouchableOpacity>
@@ -1031,6 +1048,15 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                     onSubmitEditing={searchUsers}
                   />
                 </View>
+                {/* Visitor icon (opens Visitors tab) */}
+                <TouchableOpacity
+                  style={styles.iconBtn}
+                  accessible
+                  accessibilityLabel="Visitors"
+                  onPress={() => setTab('visitors')}
+                >
+                  <Ionicons name="eye-outline" size={20} />
+                </TouchableOpacity>
                 <TouchableOpacity
                   onPress={() => {
                     setTab('notices');
@@ -1490,6 +1516,12 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                   setUserAvatar={setUserAvatar}
                   setUser={setUser}
                 />
+              </View>
+            )}
+
+            {tab === 'visitors' && (
+              <View style={{ flex: 1, paddingVertical: 8 }}>
+                <VisitorsScreen />
               </View>
             )}
 

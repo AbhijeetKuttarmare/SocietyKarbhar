@@ -43,6 +43,13 @@ try {
   const debugRouter = require('./routes/debug');
   app.use('/api/debug', debugRouter);
 } catch (e) {}
+// Public webhooks (used for Google Forms / external integrations)
+try {
+  const webhooksRouter = require('./routes/webhooks');
+  app.use('/api/webhooks', webhooksRouter);
+} catch (e) {
+  console.warn('webhooks router not loaded', e && e.message);
+}
 const superadminRouter = require('./routes/superadmin');
 app.use('/api/superadmin', superadminRouter);
 const adminRouter = require('./routes/admin');

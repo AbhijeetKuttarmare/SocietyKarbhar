@@ -585,7 +585,7 @@ router.get('/staff', async (req, res) => {
 router.post('/staff', async (req, res) => {
   try {
     const Staff = require('../models').Staff;
-    const { name, staffType, phone, wingId, status } = req.body;
+    const { name, staffType, phone, wingId, status, aadhaarUrl, role } = req.body;
     if (!name) return res.status(400).json({ error: 'name required' });
     const s = await Staff.create({
       name,
@@ -593,8 +593,34 @@ router.post('/staff', async (req, res) => {
       phone: phone || null,
       wingId: wingId || null,
       status: status || 'active',
+      aadhaarUrl: aadhaarUrl || null,
       societyId: req.user.societyId,
     });
+    // If caller requested role=security_guard, create a linked User so the guard can login.
+    if (role === 'security_guard') {
+      try {
+        const User = require('../models').User;
+        const phoneClean = String(phone || '').replace(/\D/g, '');
+        let existing = null;
+        if (phoneClean) existing = await User.findOne({ where: { phone: phoneClean } });
+        if (!existing && phoneClean) {
+          // create a basic user record; password/login via OTP flow already exists in auth
+          const user = await User.create({
+            name: name || phoneClean,
+            phone: phoneClean,
+            role: 'security_guard',
+            societyId: req.user.societyId,
+          });
+          await SuperadminLog.create({
+            user_id: req.user.id,
+            action_type: 'security_guard_user_created',
+            details: { staffId: s.id, userId: user.id },
+          });
+        }
+      } catch (e) {
+        console.warn('creating linked security guard user failed', e && e.message);
+      }
+    }
     await SuperadminLog.create({
       user_id: req.user.id,
       action_type: 'staff_created',
@@ -700,6 +726,73 @@ router.get('/complaints', async (req, res) => {
     res.json({ complaints });
   } catch (e) {
     console.error('admin complaints list failed', e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Visitors: list and get
+router.get('/visitors', async (req, res) => {
+  try {
+    const db = require('../models');
+    const { Op } = require('sequelize');
+    const { wingId, flatNumber, gateId, q, from, to, period, limit } = req.query;
+
+    const where = {};
+    if (gateId) where.gateId = gateId;
+    if (q) where.mainVisitorName = { [Op.iLike]: `%${q}%` };
+
+    // date range handling
+    let dateFrom = null;
+    let dateTo = null;
+    if (from) dateFrom = new Date(String(from));
+    if (to) dateTo = new Date(String(to));
+    if (!dateFrom && !dateTo && period) {
+      const now = new Date();
+      if (period === 'daily') {
+        dateFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      } else if (period === 'weekly') {
+        dateFrom = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
+      } else if (period === 'monthly') {
+        dateFrom = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+      }
+    }
+    if (dateFrom && dateTo) where.checkInTime = { [Op.between]: [dateFrom, dateTo] };
+    else if (dateFrom) where.checkInTime = { [Op.gte]: dateFrom };
+    else if (dateTo) where.checkInTime = { [Op.lte]: dateTo };
+
+    const include = [];
+    // include wing and flat for richer filtering / response
+    include.push({ model: db.Building, as: 'wing', required: false });
+    if (flatNumber) {
+      include.push({ model: db.Flat, required: true, where: { flat_no: String(flatNumber) } });
+    } else {
+      include.push({ model: db.Flat, required: false });
+    }
+
+    const items = await db.Visitor.findAll({
+      where,
+      include,
+      order: [['checkInTime', 'DESC']],
+      limit: Number(limit || 500),
+    });
+    res.json({ visitors: items });
+  } catch (e) {
+    console.error('list visitors failed', e && e.stack ? e.stack : e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+router.get('/visitors/:id', async (req, res) => {
+  try {
+    const db = require('../models');
+    const { id } = req.params;
+    const v = await db.Visitor.findByPk(id, {
+      include: [{ model: db.Building, as: 'wing' }, { model: db.Flat }],
+    });
+    if (!v) return res.status(404).json({ error: 'not found' });
+    res.json({ visitor: v });
+  } catch (e) {
+    console.error('get visitor failed', e && e.stack ? e.stack : e);
     res.status(500).json({ error: 'failed', detail: e && e.message });
   }
 });

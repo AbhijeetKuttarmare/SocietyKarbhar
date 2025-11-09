@@ -47,6 +47,7 @@ db.SuperadminLog = require('./superadminLog')(sequelize);
 db.AdminSociety = require('./adminSociety')(sequelize);
 db.Helpline = require('./helpline')(sequelize);
 db.Staff = require('./staff')(sequelize);
+db.Visitor = require('./visitor')(sequelize);
 
 // Associations
 db.Society.hasMany(db.Flat, { foreignKey: 'societyId' });
@@ -115,6 +116,12 @@ db.Helpline.belongsTo(db.Society, { foreignKey: 'societyId' });
 // Agreements: link agreements to flats and to users (owner/tenant)
 db.Flat.hasMany(db.Agreement, { foreignKey: 'flatId' });
 db.Agreement.belongsTo(db.Flat, { foreignKey: 'flatId' });
+
+// Visitors: link visitors to flats and buildings (wings)
+db.Flat.hasMany(db.Visitor, { foreignKey: 'flatId' });
+db.Visitor.belongsTo(db.Flat, { foreignKey: 'flatId' });
+db.Building.hasMany(db.Visitor, { foreignKey: 'wingId' });
+db.Visitor.belongsTo(db.Building, { foreignKey: 'wingId', as: 'wing' });
 
 // Agreement <-> User associations for tenant and owner
 db.User.hasMany(db.Agreement, { foreignKey: 'tenantId', as: 'tenantAgreements' });

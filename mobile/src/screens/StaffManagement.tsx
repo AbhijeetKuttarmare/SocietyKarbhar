@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import api from '../services/api';
+import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 import { Ionicons } from '@expo/vector-icons';
 
 type Props = {
@@ -41,6 +42,9 @@ export default function StaffManagement(props: Props) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [name, setName] = useState('');
   const [staffType, setStaffType] = useState('');
+  const [showTypeOptions, setShowTypeOptions] = useState(false);
+  const [aadhaarUrl, setAadhaarUrl] = useState<string | null>(null);
+  const [aadhaarUploading, setAadhaarUploading] = useState(false);
   const [phone, setPhone] = useState('');
   const [wingId, setWingId] = useState<string | null>(null);
   const [status, setStatus] = useState(true);
@@ -82,6 +86,8 @@ export default function StaffManagement(props: Props) {
 
   async function createStaff() {
     if (!name) return Alert.alert('Name required');
+    if (staffType === 'Security Guards' && !aadhaarUrl)
+      return Alert.alert('Please upload Aadhaar card for security guards');
     try {
       setSubmitting(true);
       const payload: any = {
@@ -90,6 +96,9 @@ export default function StaffManagement(props: Props) {
         phone,
         wingId,
         status: status ? 'active' : 'inactive',
+        // request backend create login-capable user for security guards
+        role: staffType === 'Security Guards' ? 'security_guard' : undefined,
+        aadhaarUrl: aadhaarUrl || undefined,
       };
       const r = await api.post('/api/admin/staff', payload);
       setName('');
@@ -197,12 +206,39 @@ export default function StaffManagement(props: Props) {
       {showAddForm && (
         <View style={styles.formRow}>
           <TextInput placeholder="Name" value={name} onChangeText={setName} style={styles.input} />
-          <TextInput
-            placeholder="Staff Type (e.g., Guard, Cleaner)"
-            value={staffType}
-            onChangeText={setStaffType}
-            style={styles.input}
-          />
+          {/* Staff type selector */}
+          <View>
+            <TouchableOpacity
+              onPress={() => setShowTypeOptions((s) => !s)}
+              style={[styles.input, { justifyContent: 'center' }]}
+            >
+              <Text>{staffType || 'Select staff type'}</Text>
+            </TouchableOpacity>
+            {showTypeOptions && (
+              <View style={{ backgroundColor: '#fff', padding: 8, borderRadius: 6, marginTop: 6 }}>
+                {[
+                  'Security Guards',
+                  'Cleaners',
+                  'Gardeners',
+                  'Electrician',
+                  'Plumber',
+                  'Manager/Supervisor',
+                  'Waste Collector',
+                ].map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    onPress={() => {
+                      setStaffType(t);
+                      setShowTypeOptions(false);
+                    }}
+                    style={{ paddingVertical: 8 }}
+                  >
+                    <Text>{t}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
           <TextInput
             placeholder="Mobile"
             value={phone}
@@ -210,6 +246,41 @@ export default function StaffManagement(props: Props) {
             style={styles.input}
             keyboardType="phone-pad"
           />
+
+          {/* Aadhaar upload shown only for Security Guards */}
+          {staffType === 'Security Guards' && (
+            <View style={{ marginBottom: 8 }}>
+              <Text style={{ marginBottom: 6 }}>Aadhaar (required)</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <TouchableOpacity
+                  style={[styles.primaryButton, { paddingVertical: 8, paddingHorizontal: 12 }]}
+                  onPress={async () => {
+                    try {
+                      setAadhaarUploading(true);
+                      // Aadhaar is an image — prefer the profile image picker which attempts direct Cloudinary upload
+                      const url = await pickAndUploadProfile();
+                      if (url) setAadhaarUrl(url);
+                    } catch (e) {
+                      console.warn('aadhaar upload failed', e);
+                      Alert.alert('Upload failed');
+                    } finally {
+                      setAadhaarUploading(false);
+                    }
+                  }}
+                >
+                  {aadhaarUploading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={{ color: '#fff' }}>
+                      {aadhaarUrl ? 'Replace Aadhaar' : 'Upload Aadhaar'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+                <View style={{ width: 12 }} />
+                {aadhaarUrl ? <Text style={{ flex: 1, color: '#065f46' }}>Uploaded</Text> : null}
+              </View>
+            </View>
+          )}
           <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 8 }}>
             <Text style={{ marginRight: 8 }}>Status</Text>
             <Switch value={status} onValueChange={setStatus} />

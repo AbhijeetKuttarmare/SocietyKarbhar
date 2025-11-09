@@ -7,6 +7,7 @@ module.exports = (sequelize) => {
       staffType: { type: DataTypes.STRING, allowNull: true },
       phone: { type: DataTypes.STRING, allowNull: true },
       wingId: { type: DataTypes.STRING, allowNull: true },
+      aadhaarUrl: { type: DataTypes.TEXT, allowNull: true },
       status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'active' },
       societyId: { type: DataTypes.UUID, allowNull: true },
     },

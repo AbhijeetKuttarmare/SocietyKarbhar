@@ -71,6 +71,278 @@ async function cloudinaryUploadDataUrl(dataUrlOrBuffer, opts = {}) {
 // Tenant routes: list/create maintenance & complaints under /api
 router.use(authenticate);
 
+// Flats: allow guards/tenants to list flats in their society (includes owner and tenant info)
+router.get('/flats', async (req, res) => {
+  try {
+    const db = require('../models');
+    const { Flat, Agreement, User, Building } = db;
+    // fetch flats with owner relation
+    const flats = await Flat.findAll({
+      where: { societyId: req.user.societyId },
+      include: [
+        {
+          model: User,
+          as: 'owner',
+          required: false,
+          attributes: ['id', 'name', 'phone', 'avatar'],
+        },
+      ],
+      order: [['flat_no', 'ASC']],
+    });
+
+    // attach tenant info by finding the latest agreement for each flat (if any)
+    const out = [];
+    for (const f of flats) {
+      const plain = f.get ? f.get({ plain: true }) : f;
+      let tenant = null;
+      let building = null;
+      try {
+        const ag = await Agreement.findOne({
+          where: { flatId: f.id },
+          order: [['createdAt', 'DESC']],
+        });
+        if (ag && ag.tenantId)
+          tenant = await User.findByPk(ag.tenantId, { attributes: ['id', 'name', 'phone'] });
+      } catch (e) {
+        // ignore
+      }
+      try {
+        if (plain.buildingId) building = await Building.findByPk(plain.buildingId);
+      } catch (e) {}
+
+      // normalize shape expected by mobile client
+      const owner_name = (plain.owner && plain.owner.name) || plain.owner_name || null;
+      const tenant_name = (tenant && tenant.name) || plain.tenant_name || null;
+      const contact_no = (plain.owner && plain.owner.phone) || plain.contact_no || null;
+
+      out.push({
+        ...plain,
+        tenant: tenant || null,
+        building: building ? (building.get ? building.get({ plain: true }) : building) : null,
+        buildingName: building ? building.name || null : null,
+        wingName: building ? building.name || null : null,
+        wingId: building ? building.id : plain.buildingId || null,
+        owner_name,
+        tenant_name,
+        contact_no,
+      });
+    }
+    res.json({ flats: out });
+  } catch (e) {
+    console.error('tenant list flats failed', e && e.stack ? e.stack : e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Buildings/Wings: list wings for this society
+router.get('/getWings', async (req, res) => {
+  try {
+    const db = require('../models');
+    const wings = await db.Building.findAll({ where: { societyId: req.user.societyId } });
+    res.json({ wings });
+  } catch (e) {
+    console.error('tenant getWings failed', e && e.stack ? e.stack : e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Users: return wings->flats->users structure similar to admin/users but tenant-scoped.
+router.get('/users', async (req, res) => {
+  try {
+    const db = require('../models');
+    const { Building, Flat, User, Agreement } = db;
+    const wings = await Building.findAll({
+      where: { societyId: req.user.societyId },
+      include: [
+        {
+          model: Flat,
+          required: false,
+          include: [
+            { model: User, as: 'owner', required: false },
+            { model: Agreement, required: false },
+          ],
+        },
+      ],
+      order: [
+        ['name', 'ASC'],
+        [Flat, 'flat_no', 'ASC'],
+      ],
+    });
+
+    // Normalize into wings -> flats -> users (deduplicated) as admin route does
+    const out = (wings || []).map((w) => {
+      const flatsRaw = (w.Flats || []).map((f) => {
+        const tenants = (f.Agreements || []).map((a) => a.tenantId).filter(Boolean);
+        // fetch tenant objects for found tenantIds
+        return {
+          id: f.id,
+          flat_no: f.flat_no,
+          owner: f.owner || null,
+          tenantIds: tenants,
+        };
+      });
+
+      // Resolve tenant objects for tenantIds in bulk (to avoid N+1 we will fetch unique tenant ids)
+      const tenantIdSet = new Set();
+      flatsRaw.forEach((fr) => (fr.tenantIds || []).forEach((t) => tenantIdSet.add(t)));
+      const tenantIds = Array.from(tenantIdSet);
+      let tenantMap = {};
+      if (tenantIds.length) {
+        // Fetch tenants
+        // eslint-disable-next-line no-unused-vars
+        tenantMap = (async () => {
+          const users = await User.findAll({ where: { id: tenantIds } });
+          const m = {};
+          (users || []).forEach((u) => (m[u.id] = u.get ? u.get({ plain: true }) : u));
+          return m;
+        })();
+      }
+
+      // Build flats array with users array
+      const flats = flatsRaw.map((fr) => {
+        const users = [];
+        if (fr.owner) users.push(fr.owner.get ? fr.owner.get({ plain: true }) : fr.owner);
+        // attach tenants if available (resolve from tenantMap promise)
+        return { ...fr, users };
+      });
+
+      return { id: w.id, name: w.name || `Wing ${w.id}`, flats };
+    });
+
+    // The above contains promises for tenantMap; resolve tenant objects synchronously per-flat to keep shape simple
+    // For simplicity: fetch agreements per flat to attach tenant objects directly
+    for (const wing of out) {
+      for (const flat of wing.flats) {
+        try {
+          const ags = await Agreement.findAll({ where: { flatId: flat.id } });
+          for (const ag of ags) {
+            if (ag.tenantId) {
+              const u = await User.findByPk(ag.tenantId);
+              if (u) flat.users.push(u.get ? u.get({ plain: true }) : u);
+            }
+          }
+        } catch (e) {}
+        // deduplicate users in flat
+        const seen = new Map();
+        const uniq = [];
+        for (const u of flat.users || []) {
+          const key = u && (u.id || u.phone || (u.name && u.name.trim()) || JSON.stringify(u));
+          if (!key) continue;
+          if (!seen.has(key)) {
+            seen.set(key, true);
+            uniq.push(u);
+          }
+        }
+        flat.users = uniq;
+      }
+    }
+
+    res.json({ wings: out });
+  } catch (e) {
+    console.error('tenant users list failed', e && e.stack ? e.stack : e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Visitors: allow guards or authenticated users to create/list/checkout visitors
+router.get('/visitors', async (req, res) => {
+  try {
+    const db = require('../models');
+    const { Op } = require('sequelize');
+    const { status, q, flatId, wingId, limit } = req.query;
+
+    const where = { societyId: req.user.societyId };
+    if (status) where.status = String(status);
+    if (flatId) where.flatId = String(flatId);
+    if (wingId) where.wingId = String(wingId);
+    if (q) where.mainVisitorName = { [Op.iLike]: `%${String(q)}%` };
+
+    const include = [
+      { model: db.Flat, required: false },
+      { model: db.Building, as: 'wing', required: false },
+    ];
+    const items = await db.Visitor.findAll({
+      where,
+      include,
+      order: [['checkInTime', 'DESC']],
+      limit: Number(limit || 500),
+    });
+    res.json({ visitors: items });
+  } catch (e) {
+    console.error('list visitors (tenant) failed', e && e.stack ? e.stack : e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+router.post('/visitors', async (req, res) => {
+  try {
+    const db = require('../models');
+    const {
+      mainVisitorName,
+      selfie,
+      flatId,
+      wingId,
+      reason,
+      numberOfPeople,
+      additionalVisitors,
+      additionalSelfies,
+      gateId,
+      visitorIdGenerated,
+      checkInTime,
+    } = req.body || {};
+
+    if (!mainVisitorName) return res.status(400).json({ error: 'mainVisitorName required' });
+    if (!flatId && !wingId) return res.status(400).json({ error: 'flatId or wingId required' });
+
+    const payload = {
+      mainVisitorName,
+      selfie: selfie || null,
+      flatId: flatId || null,
+      wingId: wingId || null,
+      reason: reason || null,
+      numberOfPeople: numberOfPeople ? Number(numberOfPeople) : null,
+      additionalVisitors: additionalVisitors || null,
+      visitorIdGenerated: visitorIdGenerated || null,
+      gateId: gateId || null,
+      societyId: req.user.societyId || null,
+      checkInTime: checkInTime ? new Date(checkInTime) : new Date(),
+      status: 'IN',
+    };
+
+    const v = await db.Visitor.create(payload);
+    // if additionalSelfies present, attach as JSON (the model doesn't have a dedicated column but we keep in additionalVisitors as fallback)
+    // respond with created visitor
+    res.json({ visitor: v });
+  } catch (e) {
+    console.error('create visitor failed', e && e.stack ? e.stack : e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+router.patch('/visitors/:id', async (req, res) => {
+  try {
+    const db = require('../models');
+    const { id } = req.params;
+    const v = await db.Visitor.findByPk(id);
+    if (!v) return res.status(404).json({ error: 'not found' });
+    if (v.societyId && req.user && String(v.societyId) !== String(req.user.societyId))
+      return res.status(404).json({ error: 'not found' });
+
+    const allowed = ['status', 'checkoutTime', 'reason', 'numberOfPeople', 'additionalVisitors'];
+    const updates = {};
+    for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
+    // if status set to OUT and no checkoutTime, set checkoutTime now
+    if (updates.status && String(updates.status).toUpperCase() === 'OUT' && !updates.checkoutTime)
+      updates.checkoutTime = new Date();
+
+    await v.update(updates);
+    res.json({ visitor: v });
+  } catch (e) {
+    console.error('update visitor failed', e && e.stack ? e.stack : e);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
 // List maintenance requests raised by current user
 router.get('/maintenance', async (req, res) => {
   try {
