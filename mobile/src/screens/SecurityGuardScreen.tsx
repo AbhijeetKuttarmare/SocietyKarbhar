@@ -1,6 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { useContext } from 'react';
-import { BottomTabContext } from '../contexts/BottomTabContext';
+import React, { useEffect, useState, useRef, useContext, useLayoutEffect } from 'react';
 import {
   View,
   Text,
@@ -20,14 +18,16 @@ import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import api from '../services/api';
 import UserProfileForm from '../components/UserProfileForm';
+import VisitorsScreen from './Admin/Visitors';
+import CCTVScreen from './CCTVScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
+import { BottomTabContext } from '../contexts/BottomTabContext';
+type Props = { user: any; onLogout?: () => void; navigation?: any };
 
-type Props = { user: any; onLogout?: () => void };
+type TabKey = 'home' | 'scan' | 'cctv' | 'directory' | 'profile' | 'visitors';
 
-type TabKey = 'home' | 'scan' | 'inside' | 'directory' | 'profile';
-
-export default function SecurityGuardScreen({ user, onLogout }: Props) {
+export default function SecurityGuardScreen({ user, onLogout, navigation }: Props) {
   const ctx = useContext(BottomTabContext);
   const [activeTab, setActiveTab] = useState<TabKey>((ctx && (ctx.activeKey as TabKey)) || 'home');
 
@@ -39,6 +39,8 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
   const [manualName, setManualName] = useState('');
   const [manualFlat, setManualFlat] = useState('');
   const [manualWing, setManualWing] = useState('');
+  const [manualWingLabel, setManualWingLabel] = useState('');
+  const [manualFlatLabel, setManualFlatLabel] = useState('');
   const [manualReason, setManualReason] = useState('');
   const [manualPeople, setManualPeople] = useState('1');
   const [selfieBase64, setSelfieBase64] = useState<string | null>(null);
@@ -84,11 +86,62 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
     return () => clearInterval(pollRef.current);
   }, []);
 
+  // add header buttons (notifications + logout) on the right
+  useLayoutEffect(() => {
+    try {
+      navigation.setOptions({
+        headerRight: () => (
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 8 }}>
+            <TouchableOpacity
+              style={{ padding: 8, marginRight: 6 }}
+              onPress={() => {
+                try {
+                  // Navigate to Notifications screen if available
+                  navigation.navigate && navigation.navigate('Notifications');
+                } catch (e) {
+                  Alert.alert('Notifications', 'Notifications screen not available');
+                }
+              }}
+            >
+              <Ionicons name="notifications-outline" size={22} color="#111" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ padding: 8 }}
+              onPress={async () => {
+                try {
+                  if (typeof onLogout === 'function') return onLogout();
+                  // fallback: clear token and try navigate to Login
+                  try {
+                    await AsyncStorage.removeItem('token');
+                  } catch (er) {}
+                  if (navigation.reset) {
+                    navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+                  } else if (navigation.navigate) {
+                    navigation.navigate('Login');
+                  }
+                } catch (e) {
+                  Alert.alert('Logout', 'Logout failed');
+                }
+              }}
+            >
+              <MaterialIcons name="logout" size={22} color="#111" />
+            </TouchableOpacity>
+          </View>
+        ),
+      });
+    } catch (e) {}
+  }, [navigation, onLogout]);
+
   useEffect(() => {
     // when tab changes, refresh relevant data immediately
     if (activeTab === 'home') fetchCounts();
-    else if (activeTab === 'inside') fetchInsideVisitors();
+    else if (activeTab === 'cctv') {
+      // CCTV tab selected. Currently we show a dedicated CCTV screen.
+      // If you want to fetch live feeds or refresh CCTV list, add that logic here.
+    }
     else if (activeTab === 'directory') fetchFlats();
+    else if (activeTab === 'scan') fetchFlats();
     else if (activeTab === 'profile') fetchProfile();
     // keep global BottomTab in sync
     try {
@@ -102,7 +155,7 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
       if (ctx && ctx.activeKey && ctx.activeKey !== activeTab) {
         const k = ctx.activeKey as TabKey;
         // only accept keys that this screen understands
-        const allowed: TabKey[] = ['home', 'scan', 'inside', 'directory', 'profile'];
+        const allowed: TabKey[] = ['home', 'scan', 'cctv', 'directory', 'profile'];
         if (allowed.includes(k)) setActiveTab(k);
       }
     } catch (e) {}
@@ -164,6 +217,14 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
         }));
         flatList.push(...flatsInW);
       }
+      try {
+        console.log(
+          '[SecurityGuard] fetched wings=',
+          (wingsData || []).length,
+          'flats=',
+          flatList.length
+        );
+      } catch (e) {}
       setFlats(flatList);
       if (resetQuery) setFlatQuery('');
     } catch (e) {
@@ -224,8 +285,9 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
   }
 
   async function submitManualVisitor() {
-    if (!manualName || !manualFlat || !manualWing || !additionalVisitorsNames)
-      return Alert.alert('Please fill all mandatory fields');
+    // require a name and at least one of flat or wing; additional visitors are optional
+    if (!manualName || (!manualFlat && !manualWing))
+      return Alert.alert('Please fill visitor name and select wing or flat');
     setSubmitting(true);
     try {
       const payload: any = {
@@ -246,6 +308,9 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
         // reset form
         setManualName('');
         setManualFlat('');
+        setManualFlatLabel('');
+        setManualWing('');
+        setManualWingLabel('');
         setManualReason('');
         setManualPeople('1');
         setSelfieBase64(null);
@@ -256,10 +321,20 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
         Alert.alert('Added', 'Visitor added (no id returned)');
       }
     } catch (e: any) {
-      Alert.alert(
-        'Submit failed',
-        (e && e.response && e.response.data && e.response.data.error) || e.message || String(e)
-      );
+      try {
+        console.error(
+          'submitManualVisitor failed',
+          e && e.response ? e.response.data || e.response : e
+        );
+      } catch (er) {}
+      const backendMsg =
+        (e &&
+          e.response &&
+          e.response.data &&
+          (e.response.data.error || JSON.stringify(e.response.data))) ||
+        e.message ||
+        String(e);
+      Alert.alert('Submit failed', backendMsg);
     } finally {
       setSubmitting(false);
     }
@@ -410,6 +485,40 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
 
   return (
     <View style={styles.container}>
+      {/* Mobile top bar (admin-style) */}
+      <View style={styles.mobileTopBar}>
+        <View style={{ flex: 1, flexDirection: 'column', alignItems: 'center' }}>
+          <Text numberOfLines={1} style={styles.mobileTitle}>
+            {societyName || 'Society Karbhar'}
+          </Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity
+            style={styles.iconBtn}
+            accessible
+            accessibilityLabel="Visitors"
+            onPress={() => setActiveTab('visitors')}
+          >
+            <Ionicons name="eye-outline" size={20} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => {
+              try {
+                navigation && navigation.navigate && navigation.navigate('Notifications');
+              } catch (e) {
+                Alert.alert('Notifications', 'Notifications screen not available');
+              }
+            }}
+          >
+            <Ionicons name="notifications-outline" size={20} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.iconBtn} onPress={onLogout}>
+            <Ionicons name="log-out-outline" size={20} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* Content area */}
       <View style={styles.content}>
         {activeTab === 'home' && (
@@ -475,14 +584,21 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
                 style={[styles.input, { justifyContent: 'center' }]}
                 onPress={() => (setWingModalTarget('manual'), setShowWingModal(true))}
               >
-                <Text>{manualWing || 'Select Wing'}</Text>
+                <Text>{manualWingLabel || manualWing || 'Select Wing'}</Text>
               </TouchableOpacity>
               <Text style={styles.label}>Flat</Text>
               <TouchableOpacity
                 style={[styles.input, { justifyContent: 'center' }]}
-                onPress={() => (setFlatModalTarget('manual'), setShowFlatModal(true))}
+                onPress={async () => {
+                  setFlatModalTarget('manual');
+                  // ensure flats are loaded for the dropdown
+                  try {
+                    await fetchFlats(false);
+                  } catch (e) {}
+                  setShowFlatModal(true);
+                }}
               >
-                <Text>{manualFlat || 'Select Flat'}</Text>
+                <Text>{manualFlatLabel || manualFlat || 'Select Flat'}</Text>
               </TouchableOpacity>
               <Text style={styles.label}>Reason</Text>
               <TextInput style={styles.input} value={manualReason} onChangeText={setManualReason} />
@@ -553,38 +669,15 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
           </ScrollView>
         )}
 
-        {activeTab === 'inside' && (
-          <View style={{ flex: 1, padding: 12 }}>
-            <Text style={styles.title}>Inside Visitors</Text>
-            {loadingInside ? (
-              <ActivityIndicator style={{ marginTop: 24 }} />
-            ) : (
-              <FlatList
-                data={insideVisitors}
-                keyExtractor={(i) => String(i.id)}
-                renderItem={({ item }) => (
-                  <View style={styles.visitorRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontWeight: '700' }}>{item.mainVisitorName}</Text>
-                      <Text style={{ color: '#6b7280' }}>
-                        {(item.Flat && item.Flat.flat_no) || item.flatId || '—'}
-                      </Text>
-                      <Text style={{ color: '#6b7280' }}>{item.reason}</Text>
-                      <Text style={{ color: '#9ca3af', fontSize: 12 }}>
-                        {item.checkInTime ? new Date(item.checkInTime).toLocaleString() : ''}
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.checkoutButton}
-                      onPress={() => checkoutVisitor(item.id)}
-                    >
-                      <Text style={{ color: '#fff' }}>Checkout</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                ListEmptyComponent={() => <Text style={{ marginTop: 12 }}>No active visitors</Text>}
-              />
-            )}
+        {activeTab === 'cctv' && (
+          <View style={{ flex: 1 }}>
+            <CCTVScreen user={user} navigation={navigation} />
+          </View>
+        )}
+
+        {activeTab === 'visitors' && (
+          <View style={{ flex: 1 }}>
+            <VisitorsScreen useAdminApi={false} />
           </View>
         )}
 
@@ -810,17 +903,24 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
             </View>
             <FlatList
               data={wings}
-              keyExtractor={(w) => String(w.key)}
+              keyExtractor={(w) => String(w.id || w.name || w.label || Math.random())}
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' }}
                   onPress={() => {
-                    if (wingModalTarget === 'manual') setManualWing(item.label);
-                    else setDirectoryWing(item.label);
+                    const name = item.name || item.label || item.name;
+                    if (wingModalTarget === 'manual') {
+                      // store id for payload and label for display
+                      // Prefer storing the building UUID (item.id). If missing, leave blank so backend fallback can resolve by name.
+                      setManualWing(item.id || '');
+                      setManualWingLabel(name);
+                      setManualFlat('');
+                      setManualFlatLabel('');
+                    } else setDirectoryWing(name);
                     setShowWingModal(false);
                   }}
                 >
-                  <Text>{item.label}</Text>
+                  <Text>{item.name || item.label}</Text>
                 </TouchableOpacity>
               )}
             />
@@ -850,32 +950,22 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
               <Text style={{ fontWeight: '700', fontSize: 16 }}>Select Flat</Text>
             </View>
             <FlatList
-              data={flats.filter((f) =>
-                manualWing
-                  ? (f.building ||
-                      f.wing ||
-                      f.Wing ||
-                      f.buildingName ||
-                      f.wingName ||
-                      f.wingId ||
-                      '') &&
-                    String(
-                      f.building ||
-                        f.wing ||
-                        f.Wing ||
-                        f.buildingName ||
-                        f.wingName ||
-                        f.wingId ||
-                        ''
-                    ).includes(manualWing)
-                  : true
-              )}
+              data={flats.filter((f) => {
+                if (!manualWing) return true;
+                const wingId =
+                  f.wingId || (f.building && (f.building.id || f.buildingId)) || f.Wing || '';
+                // compare IDs as strings
+                return String(wingId) === String(manualWing);
+              })}
               keyExtractor={(f) => String(f.id || f.flat_no || Math.random())}
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' }}
                   onPress={() => {
-                    if (flatModalTarget === 'manual') setManualFlat(item.id || item.flat_no || '');
+                    if (flatModalTarget === 'manual') {
+                      setManualFlat(item.id || item.flat_no || '');
+                      setManualFlatLabel(String(item.flat_no || item.name || item.id || ''));
+                    }
                     setShowFlatModal(false);
                   }}
                 >
@@ -922,11 +1012,11 @@ export default function SecurityGuardScreen({ user, onLogout }: Props) {
         />
         <TabButton
           icon={
-            <Feather name="list" size={20} color={activeTab === 'inside' ? '#0ea5a4' : '#6b7280'} />
+            <Ionicons name="videocam" size={20} color={activeTab === 'cctv' ? '#0ea5a4' : '#6b7280'} />
           }
-          label="Inside"
-          onPress={() => setActiveTab('inside')}
-          active={activeTab === 'inside'}
+          label="CCTV (NEW)"
+          onPress={() => setActiveTab('cctv')}
+          active={activeTab === 'cctv'}
         />
         <TabButton
           icon={
@@ -971,6 +1061,19 @@ function TabButton({ icon, label, onPress, active }: any) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   content: { flex: 1 },
+  mobileTopBar: {
+    height: Platform.OS === 'ios' ? 90 : 70,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingBottom: Platform.OS === 'ios' ? 20 : 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e6e6e6',
+    backgroundColor: '#fff',
+  },
+  mobileTitle: { fontSize: 16, fontWeight: '700' },
+  iconBtn: { padding: 8, marginLeft: 6 },
   title: { fontSize: 18, fontWeight: '700', marginBottom: 8 },
   card: { padding: 12, borderRadius: 10, backgroundColor: '#f8fafc', marginBottom: 12 },
   cardTitle: { color: '#6b7280', fontSize: 12 },

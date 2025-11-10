@@ -254,11 +254,21 @@ router.post('/addWing', async (req, res) => {
       total_floors: Number(number_of_floors),
       societyId: req.user.societyId,
     });
+    // derive a short prefix for flat numbers: prefer a single label like 'B' when admin used 'Wing B' or 'Block B'
+    let prefix = String(name || '').trim();
+    try {
+      // remove common leading words like 'wing', 'block', 'building'
+      prefix = prefix.replace(/^(wing|block|building)\s+/i, '').trim();
+      if (!prefix) prefix = String(name || '').trim();
+    } catch (e) {}
     // generate flat numbers like A-101, A-102... or simple numeric per wing
     const createdFlats = [];
     for (let floor = 1; floor <= Number(number_of_floors); floor++) {
       for (let slot = 1; slot <= Number(flats_per_floor); slot++) {
-        const flat_no = `${name}-${floor}-${slot}`; // example: WingA-1-1
+        // Format flat numbers like B-101, B-102, ... B-201, etc.
+        // Use floor as the hundreds place and slot as the last two digits (padded)
+        const slotPadded = String(slot).padStart(2, '0');
+        const flat_no = `${prefix}-${floor}${slotPadded}`; // example: B-101
         // Some DBs may not yet have the buildingId column (migration pending). Check and omit when missing.
         let f;
         try {

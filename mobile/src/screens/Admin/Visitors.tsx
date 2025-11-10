@@ -10,11 +10,14 @@ import {
   Image,
   ActivityIndicator,
   Platform,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../services/api';
 
-export default function VisitorsScreen() {
+type Props = { useAdminApi?: boolean };
+
+export default function VisitorsScreen({ useAdminApi = true }: Props) {
   const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [loading, setLoading] = useState(false);
   const [visitors, setVisitors] = useState<any[]>([]);
@@ -31,19 +34,50 @@ export default function VisitorsScreen() {
   }, [period]);
 
   async function fetchVisitors() {
+    let params: any = { period };
     try {
       setLoading(true);
-      const params: any = { period };
+      params = { period };
       if (q) params.q = q;
       if (wingId) params.wingId = wingId;
       if (flatNumber) params.flatNumber = flatNumber;
       if (gateId) params.gateId = gateId;
       if (from) params.from = from;
       if (to) params.to = to;
-      const r = await api.get('/api/admin/visitors', { params });
+      const endpoint = useAdminApi ? '/api/admin/visitors' : '/api/visitors';
+      console.log('[VisitorsScreen] fetching', endpoint, params);
+      const r = await api.get(endpoint, { params });
+      console.log('[VisitorsScreen] response', (r && r.data && (r.data.visitors || r.data)) || r);
       setVisitors(r.data.visitors || []);
     } catch (e) {
-      console.warn('fetch visitors failed', e);
+      try {
+        const err: any = e;
+        console.warn('[VisitorsScreen] fetchVisitors failed', err && err.response ? err.response.data || err.response : err);
+        const status = err && err.response && err.response.status;
+        const body = err && err.response && err.response.data;
+        const message = (body && (body.error || body.detail)) || err.message || String(err);
+
+        // If guard endpoint failed due to auth/permission, try admin endpoint as a fallback
+        if (!useAdminApi && (status === 401 || status === 403)) {
+          try {
+            console.log('[VisitorsScreen] attempting fallback to /api/admin/visitors');
+            const fr = await api.get('/api/admin/visitors', { params });
+            console.log('[VisitorsScreen] fallback response', fr && fr.data);
+            setVisitors(fr.data.visitors || []);
+            return;
+          } catch (fe) {
+            const feerr: any = fe;
+            console.warn('[VisitorsScreen] fallback failed', feerr && feerr.response ? feerr.response.data || feerr.response : feerr);
+            Alert.alert('Failed to load visitors', String(message));
+            setVisitors([]);
+            return;
+          }
+        }
+
+        Alert.alert('Failed to load visitors', String(message));
+      } catch (er) {
+        console.warn('[VisitorsScreen] fetchVisitors catch handler failed', er);
+      }
       setVisitors([]);
     } finally {
       setLoading(false);

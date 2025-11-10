@@ -71,6 +71,23 @@ async function cloudinaryUploadDataUrl(dataUrlOrBuffer, opts = {}) {
 // Tenant routes: list/create maintenance & complaints under /api
 router.use(authenticate);
 
+// Helper to stringify Sequelize errors with useful inner fields
+function formatDbError(err) {
+  try {
+    const out = {
+      message: err && err.message,
+      name: err && err.name,
+      stack: err && err.stack,
+      original:
+        err && err.original && (err.original.message || err.original.detail || err.original),
+      parent: err && err.parent && (err.parent.message || err.parent.detail || err.parent),
+    };
+    return out;
+  } catch (e) {
+    return { error: String(err) };
+  }
+}
+
 // Flats: allow guards/tenants to list flats in their society (includes owner and tenant info)
 router.get('/flats', async (req, res) => {
   try {
@@ -250,17 +267,47 @@ router.get('/visitors', async (req, res) => {
     const db = require('../models');
     const { Op } = require('sequelize');
     const { status, q, flatId, wingId, limit } = req.query;
+    // helper: check whether visitors table has a societyId column (some DBs/migrations may be missing)
+    const visitorsTableHasSocietyId = async () => {
+      const qi = db.sequelize.getQueryInterface();
+      const candidates = ['Visitors', 'visitors'];
+      for (const t of candidates) {
+        try {
+          const desc = await qi.describeTable(t);
+          if (desc && desc.societyId) return true;
+        } catch (e) {
+          // ignore and try next
+        }
+      }
+      return false;
+    };
 
-    const where = { societyId: req.user.societyId };
+    // normalize wingId: clients may send wing name/label instead of UUID
+    const isUuid = (v) =>
+      typeof v === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+    let resolvedWingId = wingId;
+    try {
+      if (wingId && !isUuid(wingId)) {
+        const b = await db.Building.findOne({
+          where: { societyId: req.user.societyId, name: String(wingId) },
+        });
+        if (b) resolvedWingId = b.id;
+      }
+    } catch (e) {}
+    const hasSocietyId = await visitorsTableHasSocietyId();
+    const where = hasSocietyId ? { societyId: req.user.societyId } : {};
     if (status) where.status = String(status);
     if (flatId) where.flatId = String(flatId);
-    if (wingId) where.wingId = String(wingId);
+    if (resolvedWingId) where.wingId = String(resolvedWingId);
     if (q) where.mainVisitorName = { [Op.iLike]: `%${String(q)}%` };
 
     const include = [
       { model: db.Flat, required: false },
       { model: db.Building, as: 'wing', required: false },
     ];
+    // Log query filter for debugging
+    console.log('[tenant/visitors] findAll where=', JSON.stringify(where));
     const items = await db.Visitor.findAll({
       where,
       include,
@@ -269,8 +316,9 @@ router.get('/visitors', async (req, res) => {
     });
     res.json({ visitors: items });
   } catch (e) {
-    console.error('list visitors (tenant) failed', e && e.stack ? e.stack : e);
-    res.status(500).json({ error: 'failed', detail: e && e.message });
+    console.error('list visitors (tenant) failed', formatDbError(e));
+    // expose the DB error message to client for easier debugging (not ideal for prod)
+    res.status(500).json({ error: 'failed', detail: e && e.message, db: formatDbError(e) });
   }
 });
 
@@ -292,30 +340,114 @@ router.post('/visitors', async (req, res) => {
     } = req.body || {};
 
     if (!mainVisitorName) return res.status(400).json({ error: 'mainVisitorName required' });
-    if (!flatId && !wingId) return res.status(400).json({ error: 'flatId or wingId required' });
 
+    // If wingId was provided as a human label (e.g. 'A' or 'Wing A'), try to resolve to Building.id
+    const isUuid = (v) =>
+      typeof v === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+    let useFlatId = flatId;
+    let useWingId = wingId;
+    try {
+      if (wingId && !isUuid(wingId)) {
+        const b = await db.Building.findOne({
+          where: { societyId: req.user.societyId, name: String(wingId) },
+        });
+        if (b) useWingId = b.id;
+        else useWingId = null;
+      }
+    } catch (e) {}
+
+    if (!useFlatId && !useWingId)
+      return res.status(400).json({ error: 'flatId or wingId required' });
+
+    // Log incoming payload for debugging (helps identify type mismatches)
+    try {
+      console.log(
+        '[tenant/visitors] create payload',
+        JSON.stringify({
+          mainVisitorName,
+          flatId,
+          wingId,
+          numberOfPeople,
+          visitorIdGenerated,
+        }).slice(0, 2000)
+      );
+    } catch (e) {}
+
+    // Only include societyId if the visitors table actually has that column (migration may be pending)
+    const qi = db.sequelize.getQueryInterface();
+    let hasSocietyId = false;
+    try {
+      const candidates = ['Visitors', 'visitors'];
+      for (const t of candidates) {
+        try {
+          const desc = await qi.describeTable(t);
+          if (desc && desc.societyId) {
+            hasSocietyId = true;
+            break;
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+
+    // Build payload. If the visitors table has a societyId column, set it server-side
+    // to the current user's societyId so visitors created by guards/tenants are visible
+    // in later queries that filter by societyId.
+    // NOTE: when migrations are in-progress the create below will retry without societyId
+    // if the DB does not actually have the column (see error handling below).
     const payload = {
       mainVisitorName,
       selfie: selfie || null,
-      flatId: flatId || null,
-      wingId: wingId || null,
+      flatId: useFlatId || null,
+      wingId: useWingId || null,
       reason: reason || null,
       numberOfPeople: numberOfPeople ? Number(numberOfPeople) : null,
       additionalVisitors: additionalVisitors || null,
       visitorIdGenerated: visitorIdGenerated || null,
       gateId: gateId || null,
-      societyId: req.user.societyId || null,
+      // include societyId when possible so created visitors are scoped correctly
+      ...(hasSocietyId ? { societyId: req.user.societyId } : {}),
       checkInTime: checkInTime ? new Date(checkInTime) : new Date(),
       status: 'IN',
     };
 
-    const v = await db.Visitor.create(payload);
-    // if additionalSelfies present, attach as JSON (the model doesn't have a dedicated column but we keep in additionalVisitors as fallback)
+    // Ensure Sequelize only writes the fields we explicitly set (avoid inserting model attrs not present in payload)
+    const fieldsToWrite = Object.keys(payload || {});
+    let v;
+    try {
+      v = await db.Visitor.create(payload, { fields: fieldsToWrite });
+    } catch (createErr) {
+      // If DB complains about missing societyId column, retry without societyId as a fallback
+      try {
+        const msg =
+          (createErr && (createErr.message || createErr.original || createErr.parent || '') + '') ||
+          '';
+        if (String(msg).toLowerCase().includes('societyid')) {
+          try {
+            // remove societyId and retry
+            const fallbackPayload = { ...payload };
+            delete fallbackPayload.societyId;
+            const fallbackFields = Object.keys(fallbackPayload || {});
+            console.warn(
+              '[tenant/visitors] retrying create without societyId due to DB schema mismatch'
+            );
+            v = await db.Visitor.create(fallbackPayload, { fields: fallbackFields });
+          } catch (retryErr) {
+            throw retryErr;
+          }
+        } else {
+          throw createErr;
+        }
+      } catch (outerErr) {
+        throw outerErr;
+      }
+    }
+
     // respond with created visitor
     res.json({ visitor: v });
   } catch (e) {
-    console.error('create visitor failed', e && e.stack ? e.stack : e);
-    res.status(500).json({ error: 'failed', detail: e && e.message });
+    console.error('create visitor failed', formatDbError(e));
+    res.status(500).json({ error: 'failed', detail: e && e.message, db: formatDbError(e) });
   }
 });
 

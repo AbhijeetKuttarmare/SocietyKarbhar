@@ -7,6 +7,7 @@ module.exports = (sequelize) => {
       selfie: { type: DataTypes.TEXT, allowNull: true },
       flatId: { type: DataTypes.UUID, allowNull: true },
       wingId: { type: DataTypes.UUID, allowNull: true },
+      societyId: { type: DataTypes.UUID, allowNull: true },
       reason: { type: DataTypes.TEXT, allowNull: true },
       numberOfPeople: { type: DataTypes.INTEGER, allowNull: true },
       additionalVisitors: { type: DataTypes.JSON, allowNull: true },
