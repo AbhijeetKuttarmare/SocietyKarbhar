@@ -48,6 +48,7 @@ db.AdminSociety = require('./adminSociety')(sequelize);
 db.Helpline = require('./helpline')(sequelize);
 db.Staff = require('./staff')(sequelize);
 db.Visitor = require('./visitor')(sequelize);
+db.Camera = require('./camera')(sequelize);
 
 // Associations
 db.Society.hasMany(db.Flat, { foreignKey: 'societyId' });

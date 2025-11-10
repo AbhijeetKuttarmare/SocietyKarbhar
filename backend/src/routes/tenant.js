@@ -322,6 +322,23 @@ router.get('/visitors', async (req, res) => {
   }
 });
 
+// Cameras for non-admin clients (guards/tenants): return cameras for the current society
+// This allows security guards / tenant apps to list available CCTV cameras without requiring admin role.
+router.get('/cctvs', async (req, res) => {
+  try {
+    const Camera = require('../models').Camera;
+    if (!Camera) return res.json({ cameras: [] });
+    const cams = await Camera.findAll({ where: { societyId: req.user.societyId } });
+    // Filter out inactive cameras on tenant/guard views to reduce noise
+    const activeOnly = (req.query.activeOnly || '1') !== '0';
+    const out = activeOnly ? cams.filter((c) => c.is_active !== false) : cams;
+    res.json({ cameras: out });
+  } catch (e) {
+    console.error('tenant list cctvs failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
 router.post('/visitors', async (req, res) => {
   try {
     const db = require('../models');

@@ -12,6 +12,7 @@ import AdminScreen from './src/screens/AdminScreen';
 import OwnerScreen from './src/screens/OwnerScreen';
 import TenantScreen from './src/screens/TenantScreen';
 import SecurityGuardScreen from './src/screens/SecurityGuardScreen';
+import CCTVScreen from './src/screens/CCTVScreen';
 import BottomTab from './src/components/BottomTab';
 import { BottomTabProvider, BottomTabContext } from './src/contexts/BottomTabContext';
 
@@ -131,7 +132,7 @@ function BottomTabWrapper({ user }: { user: any }) {
       items = [
         { key: 'home', label: 'Home', icon: 'home' },
         { key: 'scan', label: 'Scan', icon: 'qr-code' },
-        { key: 'inside', label: 'Inside', icon: 'list' },
+        { key: 'cctv', label: 'CCTV', icon: 'videocam' },
         { key: 'directory', label: 'Directory', icon: 'business' },
         { key: 'profile', label: 'Profile', icon: 'person' },
       ];
@@ -139,6 +140,8 @@ function BottomTabWrapper({ user }: { user: any }) {
     }
     // Admin users get a dedicated 'Users' tab
     if (user && user.role === 'admin') {
+      // admin internal tab key is 'cameras' (AdminScreen maps this -> cameras tab)
+      items.push({ key: 'cameras', label: 'CCTV', icon: 'videocam' });
       items.push({ key: 'users', label: 'Users', icon: 'people' });
     }
     // Tenant-specific tab

@@ -26,12 +26,7 @@ export default function BottomTab({ activeKey, onChange, items }: Props) {
   // If parent passed an explicit `items` prop, use it exactly in the given order.
   // Only fall back to defaultItems when no items are provided by parent.
   const list: Item[] = items && items.length ? items.slice() : defaultItems.slice();
-  try {
-    console.log(
-      '[BottomTab] received items =',
-      list.map((i) => i.key)
-    );
-  } catch (e) {}
+  // avoid noisy logging each render which can amplify re-renders in dev
 
   const bottomPadding = Math.max(insets.bottom, Platform.OS === 'ios' ? 20 : 8);
 

@@ -12,9 +12,21 @@ export const BottomTabContext = createContext<BottomTabState>({
 
 export const BottomTabProvider: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const [activeKey, setActiveKey] = useState<string>('home');
-  return (
-    <BottomTabContext.Provider value={{ activeKey, setActiveKey }}>
-      {children}
-    </BottomTabContext.Provider>
+
+  // Guarded setter: only update state when the new key is different
+  const guardedSetActiveKey = React.useCallback((k: string) => {
+    try {
+      setActiveKey((prev) => (prev === k ? prev : k));
+    } catch (e) {
+      // ignore
+    }
+  }, []);
+
+  // Memoize the context value so consumers don't re-render due to object identity changes
+  const value = React.useMemo(
+    () => ({ activeKey, setActiveKey: guardedSetActiveKey }),
+    [activeKey, guardedSetActiveKey]
   );
+
+  return <BottomTabContext.Provider value={value}>{children}</BottomTabContext.Provider>;
 };

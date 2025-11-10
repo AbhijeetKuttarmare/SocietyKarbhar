@@ -4,6 +4,7 @@ const { User, Flat } = require('../models');
 const {
   Building,
   Helpline,
+  Camera,
   Document,
   Agreement,
   SuperadminLog,
@@ -552,6 +553,73 @@ router.post('/helplines', async (req, res) => {
     details: { helplineId: h.id, type: h.type, phone: h.phone },
   });
   res.json({ helpline: h });
+});
+
+// Cameras: list cameras for this admin's society
+router.get('/cameras', async (req, res) => {
+  try {
+    const CameraModel = require('../models').Camera;
+    const cams = await CameraModel.findAll({ where: { societyId: req.user.societyId } });
+    res.json({ cameras: cams });
+  } catch (e) {
+    console.error('list cameras failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Add camera
+router.post('/cameras', async (req, res) => {
+  try {
+    const { name, ip_address, port, username, password, rtsp_path, is_active } = req.body;
+    if (!name || !ip_address || !username || !password)
+      return res.status(400).json({ error: 'name, ip_address, username and password required' });
+    const CameraModel = require('../models').Camera;
+    const cam = await CameraModel.create({
+      societyId: req.user.societyId,
+      name,
+      ip_address,
+      port: port || 554,
+      username,
+      password,
+      rtsp_path: rtsp_path || 'cam/realmonitor?channel=1&subtype=0',
+      is_active: typeof is_active === 'boolean' ? is_active : true,
+    });
+    await SuperadminLog.create({
+      user_id: req.user.id,
+      action_type: 'camera_created',
+      details: { cameraId: cam.id, name: cam.name },
+    });
+    res.json({ camera: cam });
+  } catch (e) {
+    console.error('create camera failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
+});
+
+// Test camera RTSP connection (uses ffmpeg if available)
+router.post('/cameras/test', async (req, res) => {
+  try {
+    const { ip_address, port, username, password, rtsp_path } = req.body;
+    if (!ip_address || !username || !password)
+      return res.status(400).json({ error: 'ip_address, username and password required' });
+    const rtspUrl = `rtsp://${username}:${password}@${ip_address}:${port || 554}/${
+      rtsp_path || ''
+    }`;
+    const { exec } = require('child_process');
+    // Try a short ffmpeg probe (2 seconds). If ffmpeg is not installed, return unsupported.
+    exec(`ffmpeg -i "${rtspUrl}" -t 2 -f null -`, { timeout: 15000 }, (err, stdout, stderr) => {
+      if (err) {
+        console.warn('ffmpeg test failed', err && err.message);
+        return res
+          .status(400)
+          .json({ ok: false, message: 'Connection failed', detail: stderr || err.message });
+      }
+      return res.json({ ok: true, message: 'Connection successful' });
+    });
+  } catch (e) {
+    console.error('test camera failed', e && e.message);
+    res.status(500).json({ error: 'failed', detail: e && e.message });
+  }
 });
 
 router.put('/helplines/:id', async (req, res) => {

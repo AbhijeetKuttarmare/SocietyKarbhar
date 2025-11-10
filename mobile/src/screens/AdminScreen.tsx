@@ -34,6 +34,7 @@ import pickAndUploadProfile, {
 import AdminProfile from './AdminProfile';
 import StaffManagement from './StaffManagement';
 import VisitorsScreen from './Admin/Visitors';
+import CamerasScreen from './Admin/Cameras';
 
 // Responsive Admin Screen
 // - Preserves all API calls / logic from your original file
@@ -85,6 +86,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
     | 'profile'
     | 'staff'
     | 'visitors'
+    | 'cameras'
   >('dashboard');
   const [tab2, setTab2] = useState<'wings' | 'logs'>('wings');
   const [q, setQ] = useState('');
@@ -827,6 +829,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
       else if (k === 'users') setTab('users');
       else if (k === 'notices') setTab('notices');
       else if (k === 'profile') setTab('profile');
+      else if (k === 'cameras') setTab('cameras');
     } catch (e) {}
   }, [bottomTab.activeKey]);
 
@@ -840,6 +843,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
         users: 'users',
         notices: 'notices',
         profile: 'profile',
+        cameras: 'cameras',
       };
       const k = map[tab] || 'home';
       if (bottomTab.activeKey !== k) bottomTab.setActiveKey(k);
@@ -1247,6 +1251,18 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                       <Ionicons name="alert-circle" size={16} />
                       <Text style={styles.actionBtnText}>Complaints</Text>
                     </TouchableOpacity>
+
+                    {/* Cameras quick action */}
+                    <TouchableOpacity
+                      style={[
+                        styles.actionBtn,
+                        isMobile && { width: '100%', justifyContent: 'center', marginBottom: 8 },
+                      ]}
+                      onPress={() => setTab('cameras')}
+                    >
+                      <Ionicons name="videocam" size={16} />
+                      <Text style={styles.actionBtnText}>Cameras</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               </ScrollView>
@@ -1522,6 +1538,12 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
             {tab === 'visitors' && (
               <View style={{ flex: 1, paddingVertical: 8 }}>
                 <VisitorsScreen />
+              </View>
+            )}
+
+            {tab === 'cameras' && (
+              <View style={{ flex: 1, paddingVertical: 8 }}>
+                <CamerasScreen />
               </View>
             )}
 

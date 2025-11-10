@@ -70,6 +70,11 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
   // Time / date
   const [now, setNow] = useState(new Date());
 
+  // CCTV feeds
+  const [cameras, setCameras] = useState<any[]>([]);
+  const [loadingCams, setLoadingCams] = useState(false);
+  const [guardFeedRtsp, setGuardFeedRtsp] = useState<string | null>(null);
+
   const pollRef = useRef<any>(null);
 
   useEffect(() => {
@@ -137,10 +142,19 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
     // when tab changes, refresh relevant data immediately
     if (activeTab === 'home') fetchCounts();
     else if (activeTab === 'cctv') {
-      // CCTV tab selected. Currently we show a dedicated CCTV screen.
-      // If you want to fetch live feeds or refresh CCTV list, add that logic here.
-    }
-    else if (activeTab === 'directory') fetchFlats();
+      // when CCTV tab selected, fetch camera list
+      fetchCCTVs();
+      // check if a camera RTSP was requested to open
+      (async () => {
+        try {
+          const rt = await AsyncStorage.getItem('openCameraRtsp');
+          if (rt) {
+            await AsyncStorage.removeItem('openCameraRtsp');
+            setGuardFeedRtsp(rt);
+          }
+        } catch (e) {}
+      })();
+    } else if (activeTab === 'directory') fetchFlats();
     else if (activeTab === 'scan') fetchFlats();
     else if (activeTab === 'profile') fetchProfile();
     // keep global BottomTab in sync
@@ -166,6 +180,49 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
     fetchInsideVisitors();
     fetchFlats(false);
     fetchProfile();
+  }
+
+  async function fetchCCTVs() {
+    setLoadingCams(true);
+    try {
+      // Prefer tenant/guard-accessible cameras. Try admin cameras endpoint first (may be shared),
+      // then fall back to a tenant-specific /api/cctvs if available. If both fail, show empty list
+      // so UI indicates there are no configured cameras instead of showing dummy feeds.
+      let cams: any[] = [];
+      // try admin cameras (some deployments expose this read-only to tenants/guards)
+      try {
+        const r1 = await api.get('/api/admin/cameras');
+        console.debug('[SecurityGuard] /api/admin/cameras ->', r1 && r1.status, r1 && r1.data);
+        if (r1 && r1.data && Array.isArray(r1.data.cameras)) cams = r1.data.cameras;
+      } catch (e) {
+        const err: any = e;
+        console.warn(
+          '[SecurityGuard] /api/admin/cameras error',
+          err && (err.response || err.message || err)
+        );
+      }
+
+      if (!cams.length) {
+        try {
+          // tenant/guard-facing endpoint
+          const r2 = await api.get('/api/cctvs');
+          console.debug('[SecurityGuard] /api/cctvs ->', r2 && r2.status, r2 && r2.data);
+          if (r2 && r2.data && Array.isArray(r2.data.cameras)) cams = r2.data.cameras;
+        } catch (e) {
+          const err: any = e;
+          console.warn(
+            '[SecurityGuard] /api/cctvs error',
+            err && (err.response || err.message || err)
+          );
+        }
+      }
+
+      setCameras(cams || []);
+    } catch (e) {
+      setCameras([]);
+    } finally {
+      setLoadingCams(false);
+    }
   }
 
   async function fetchCounts() {
@@ -523,10 +580,10 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
       <View style={styles.content}>
         {activeTab === 'home' && (
           <ScrollView contentContainerStyle={{ padding: 16 }}>
-            <Text style={styles.title}>Home</Text>
-            {societyName ? (
-              <Text style={{ color: '#6b7280', marginBottom: 6 }}>{societyName}</Text>
-            ) : null}
+            <View>
+              <Text style={styles.title}>Home</Text>
+              <Text style={styles.timeStamp}>{now.toLocaleString()}</Text>
+            </View>
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Gate</Text>
               <Text style={styles.cardValue}>
@@ -561,10 +618,6 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
               >
                 <Text style={styles.actionText}>Flat Directory</Text>
               </TouchableOpacity>
-            </View>
-
-            <View style={{ marginTop: 18 }}>
-              <Text style={{ color: '#374151' }}>{now.toLocaleString()}</Text>
             </View>
           </ScrollView>
         )}
@@ -671,7 +724,12 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
 
         {activeTab === 'cctv' && (
           <View style={{ flex: 1 }}>
-            <CCTVScreen user={user} navigation={navigation} />
+            <CCTVScreen
+              user={user}
+              navigation={navigation}
+              cameras={cameras}
+              loading={loadingCams}
+            />
           </View>
         )}
 
@@ -988,6 +1046,49 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
         </View>
       </Modal>
 
+      {/* Auto-opened camera feed modal for guards (when admin requested Open in CCTV tab) */}
+      <Modal visible={!!guardFeedRtsp} transparent animationType="slide">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center' }}>
+          <View
+            style={{
+              margin: 20,
+              backgroundColor: '#fff',
+              borderRadius: 8,
+              padding: 16,
+              elevation: 4,
+            }}
+          >
+            <Text style={{ fontWeight: '700', marginBottom: 8 }}>Camera Feed</Text>
+            <Text numberOfLines={2} style={{ color: '#6b7280', marginBottom: 12 }}>
+              {guardFeedRtsp}
+            </Text>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+              <TouchableOpacity
+                style={{ marginRight: 12 }}
+                onPress={() => {
+                  try {
+                    Linking.openURL(String(guardFeedRtsp));
+                  } catch (e) {
+                    Alert.alert('Open failed', 'Could not open URL');
+                  }
+                }}
+              >
+                <Text style={{ color: '#2563eb' }}>Open in external player</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setGuardFeedRtsp(null);
+                }}
+              >
+                <Text style={{ color: '#6b7280' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Bottom tab bar */}
       <View style={styles.bottomBar}>
         <TabButton
@@ -1012,9 +1113,13 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
         />
         <TabButton
           icon={
-            <Ionicons name="videocam" size={20} color={activeTab === 'cctv' ? '#0ea5a4' : '#6b7280'} />
+            <Ionicons
+              name="videocam"
+              size={20}
+              color={activeTab === 'cctv' ? '#0ea5a4' : '#6b7280'}
+            />
           }
-          label="CCTV (NEW)"
+          label="CCTV"
           onPress={() => setActiveTab('cctv')}
           active={activeTab === 'cctv'}
         />
@@ -1075,6 +1180,7 @@ const styles = StyleSheet.create({
   mobileTitle: { fontSize: 16, fontWeight: '700' },
   iconBtn: { padding: 8, marginLeft: 6 },
   title: { fontSize: 18, fontWeight: '700', marginBottom: 8 },
+  timeStamp: { fontSize: 17, fontWeight: '700', color: '#374151', textAlign: 'right' },
   card: { padding: 12, borderRadius: 10, backgroundColor: '#f8fafc', marginBottom: 12 },
   cardTitle: { color: '#6b7280', fontSize: 12 },
   cardValue: { fontSize: 16, fontWeight: '700' },
