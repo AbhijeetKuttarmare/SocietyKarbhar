@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  ScrollView,
   View,
   Text,
   TextInput,
@@ -37,6 +36,8 @@ export default function LoginScreen({ onLogin }: Props): React.ReactElement {
   const [devOtpCode, setDevOtpCode] = useState<string | null>(null);
   const devCodeTimer = useRef<any>(null);
 
+  // Keep refs used by inputs/timers; animations removed per request
+
   // Animations removed: keep screenWidth if needed for responsive layout
   const screenWidth = Dimensions.get('window').width;
 
@@ -54,7 +55,7 @@ export default function LoginScreen({ onLogin }: Props): React.ReactElement {
   useEffect(() => {
     let t: any;
     if (resendTimer > 0) {
-      t = setTimeout(() => setResendTimer((s) => s - 1), 1000);
+      t = setTimeout(() => setResendTimer((s) => Math.max(0, s - 1)), 1000);
     }
     return () => clearTimeout(t);
   }, [resendTimer]);
@@ -167,70 +168,48 @@ export default function LoginScreen({ onLogin }: Props): React.ReactElement {
 
   return (
     <SafeAreaView style={styles.flexFill}>
+      {/* Soft pink background to match reference */}
       <LinearGradient
-        colors={['#6D28D9', '#0ea5a0']}
+        colors={['#fff1f3', '#fff9fb']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.gradientFull}
       />
 
-      {/* Decorative blurred blobs */}
-      <View style={[styles.blob, styles.blob1]} />
-      <View style={[styles.blob, styles.blob2]} />
-
+      {/* Decorative blurred blobs (static) */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 20}
         style={{ flex: 1 }}
       >
-        <ScrollView
-          contentContainerStyle={styles.containerScroll}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={[styles.card]}>
-            {/* App logo: prefer a bundled local asset. Place your image at
-                mobile/assets/society-karbhar-logo.png so Metro can bundle it.
-                If you don't add the file, the placeholder initials will be shown. */}
-            {/** Try to require the local asset. If you add the file at the path below
-             *  the bundler will include it and it will show instead of the initials.
-             */}
+        <View style={styles.pageContent}>
+          {/* Centered logo/illustration area */}
+          <View style={styles.logoWrap}>
             {/* eslint-disable-next-line @typescript-eslint/no-var-requires */}
-            {
-              // note: ensure file exists at '../../assets/society-karbhar-logo.png'
-              // path relative to this file (mobile/src/screens/...)
-              (() => {
-                try {
-                  const logoImg = require('../../assets/society-karbhar-logo.png');
-                  return <Image source={logoImg} style={styles.logo} />;
-                } catch (e) {
-                  return (
-                    <View style={styles.logoPlaceholder}>
-                      <Text style={styles.logoInitials}>SK</Text>
-                    </View>
-                  );
-                }
-              })()
-            }
-            <Text style={styles.title}>Society Karbhar</Text>
+            {(() => {
+              try {
+                const logoImg = require('../../assets/society-karbhar-logo.png');
+                return <Image source={logoImg} style={styles.logo} />;
+              } catch (e) {
+                return (
+                  <View style={styles.logoPlaceholder}>
+                    <Text style={styles.logoInitials}>SK</Text>
+                  </View>
+                );
+              }
+            })()}
+            <Text style={styles.titlecentre}>Welcome back !</Text>
+            <Text style={styles.subtitle}>
+              Please confirm your country code and enter your mobile number
+            </Text>
+          </View>
 
-            {/* Phone input / Send OTP panel */}
-            <View
-              style={[
-                styles.panel,
-                // center phone panel like the OTP panel so inputs (flag +91 + textbox) are centered
-                {
-                  opacity: otpSent ? 0 : 1,
-                  width: '90%',
-                  alignSelf: 'center',
-                  alignItems: 'center',
-                },
-              ]}
-              pointerEvents={otpSent ? 'none' : 'auto'}
-            >
+          {/* When OTP is not sent, keep mobile input at bottom; when OTP is sent, show OTP panel centered */}
+          {!otpSent ? (
+            <View style={styles.bottomPanel}>
               <View style={styles.floatingLabelContainer}>
-                {/* <Animated.Text style={[styles.floatingLabel, { transform: [{ translateY: phoneFocusAnim.interpolate({ inputRange:[0,1], outputRange: [0,-18] }) }, { scale: phoneFocusAnim.interpolate({ inputRange:[0,1], outputRange: [1,0.85] }) }], opacity: phoneFocusAnim } ]}>Mobile Number</Animated.Text> */}
                 <View style={styles.phoneRow}>
                   <View style={styles.countryCodeSmall}>
-                    {/* Prefer a local bundled PNG at mobile/assets/flags/in.png. If missing, fall back to an emoji so the UI always shows a flag. */}
                     {/* eslint-disable-next-line @typescript-eslint/no-var-requires */}
                     {(() => {
                       try {
@@ -243,16 +222,13 @@ export default function LoginScreen({ onLogin }: Props): React.ReactElement {
                     <Text style={styles.countryTextSmall}>+91</Text>
                   </View>
                   <TextInput
-                    style={[styles.inputModern, phoneError ? styles.inputError : {}]}
-                    placeholder="Enter mobile number"
+                    style={[styles.inputUnderline, phoneError ? styles.inputError : {}]}
+                    placeholder="Mobile number"
                     placeholderTextColor="rgba(0,0,0,0.3)"
                     keyboardType="phone-pad"
-                    value={phone}
-                    onChangeText={(v) => {
-                      setPhone(v.replace(/\D/g, ''));
-                      setPhoneError('');
-                    }}
                     maxLength={10}
+                    onChangeText={setPhone}
+                    value={phone}
                     onFocus={() => setPhoneFocused(true)}
                     onBlur={() => setPhoneFocused(false)}
                   />
@@ -261,45 +237,35 @@ export default function LoginScreen({ onLogin }: Props): React.ReactElement {
               {phoneError ? (
                 <Text style={styles.inlineError}>{phoneError}</Text>
               ) : (
-                <View style={{ height: 16 }} />
+                <View style={{ height: 8 }} />
               )}
 
               <TouchableOpacity
-                style={[styles.primaryButton, loading ? styles.buttonDisabled : {}]}
+                style={[styles.primaryButtonPink, loading ? styles.buttonDisabled : {}]}
                 onPress={handleSendOtp}
                 disabled={loading}
                 activeOpacity={0.85}
               >
-                <LinearGradient
-                  colors={['#7c3aed', '#06b6d4']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={styles.buttonGradient}
-                >
-                  {loading ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.buttonText}>Send OTP</Text>
-                  )}
-                </LinearGradient>
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.buttonPinkText}>CONTINUE</Text>
+                )}
               </TouchableOpacity>
-            </View>
 
-            {/* OTP panel */}
-            <View
-              style={[
-                styles.panel,
-                // fade in place: show/hide based on otpSent
-                {
-                  opacity: otpSent ? 1 : 0,
-                  width: '90%',
-                  alignSelf: 'center',
-                  alignItems: 'center',
-                },
-              ]}
-              pointerEvents={otpSent ? 'auto' : 'none'}
-            >
-              {/* Dev-only: show OTP code returned by backend for 10s to ease testing */}
+              {snackbarVisible && (
+                <View
+                  style={[
+                    styles.snackbar,
+                    snackbarType === 'error' ? styles.snackbarError : styles.snackbarSuccess,
+                  ]}
+                >
+                  <Text style={styles.snackbarText}>{snackbarText}</Text>
+                </View>
+              )}
+            </View>
+          ) : (
+            <View style={styles.otpCenterPanel}>
               {devOtpCode && (
                 <View style={styles.devOtpBox}>
                   <Text style={styles.devOtpText}>Dev OTP: {devOtpCode}</Text>
@@ -307,82 +273,52 @@ export default function LoginScreen({ onLogin }: Props): React.ReactElement {
               )}
               <Text style={styles.otpTitle}>Enter the 6-digit code</Text>
               <View style={styles.otpContainerModern}>
-                {otp.map((digit, index) => {
-                  const isFocused = focusedIndex === index;
-                  return (
-                    <TextInput
-                      key={index}
-                      ref={(ref) => {
-                        inputRefs.current[index] = ref!;
-                      }}
-                      style={[styles.otpInputModern, isFocused ? styles.otpInputFocused : {}]}
-                      keyboardType="number-pad"
-                      maxLength={1}
-                      value={digit}
-                      onFocus={() => setFocusedIndex(index)}
-                      onBlur={() => setFocusedIndex(null)}
-                      onChangeText={(value) => handleOtpChange(value, index)}
-                    />
-                  );
-                })}
+                {otp.map((digit, index) => (
+                  <TextInput
+                    key={index}
+                    ref={(ref) => {
+                      inputRefs.current[index] = ref!;
+                    }}
+                    style={[
+                      styles.otpInputModern,
+                      focusedIndex === index ? styles.otpInputFocused : {},
+                    ]}
+                    keyboardType="number-pad"
+                    maxLength={1}
+                    value={digit}
+                    onFocus={() => setFocusedIndex(index)}
+                    onBlur={() => setFocusedIndex(null)}
+                    onChangeText={(value) => handleOtpChange(value, index)}
+                  />
+                ))}
               </View>
               {otpError ? (
                 <Text style={styles.inlineError}>{otpError}</Text>
               ) : (
-                <View style={{ height: 16 }} />
+                <View style={{ height: 8 }} />
               )}
-
               <TouchableOpacity
-                style={[styles.primaryButton, loading ? styles.buttonDisabled : {}]}
+                style={[styles.primaryButtonPink, loading ? styles.buttonDisabled : {}]}
                 onPress={handleVerifyOtp}
                 disabled={loading}
                 activeOpacity={0.85}
               >
-                <LinearGradient
-                  colors={['#7c3aed', '#06b6d4']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={styles.buttonGradient}
-                >
-                  {loading ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.buttonText}>Verify OTP</Text>
-                  )}
-                </LinearGradient>
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.buttonPinkText}>VERIFY OTP</Text>
+                )}
               </TouchableOpacity>
-
-              <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 12 }}>
-                <TouchableOpacity onPress={handleSendOtp} disabled={resendTimer > 0 || loading}>
-                  <Text
-                    style={[styles.resendText, resendTimer > 0 || loading ? { opacity: 0.4 } : {}]}
-                  >
-                    {resendTimer > 0 ? `Resend OTP in ${resendTimer}s` : 'Resend OTP'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
             </View>
-
-            {/* Snackbar */}
-            {snackbarVisible && (
-              <View
-                style={[
-                  styles.snackbar,
-                  snackbarType === 'error' ? styles.snackbarError : styles.snackbarSuccess,
-                ]}
-              >
-                <Text style={styles.snackbarText}>{snackbarText}</Text>
-              </View>
-            )}
-          </View>
-        </ScrollView>
+          )}
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  flexFill: { flex: 1, backgroundColor: 'transparent' },
+  flexFill: { flex: 1, backgroundColor: '#fdeff2' },
   gradientBg: {
     position: 'absolute',
     left: 0,
@@ -419,10 +355,29 @@ const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 18 },
   containerScroll: {
     flexGrow: 1,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    alignItems: 'stretch',
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+  },
+  pageContent: {
+    width: '100%',
+    paddingHorizontal: 22,
+    paddingTop: 80,
+    paddingBottom: 40,
+    backgroundColor: '#ffffff',
     alignItems: 'center',
-    paddingHorizontal: 18,
-    paddingVertical: 28,
+    justifyContent: 'space-between',
+    flex: 1,
+  },
+  titleLeft: {
+    fontSize: Platform.OS === 'ios' ? 28 : 24,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'left',
+    marginBottom: Platform.OS === 'ios' ? 12 : 10,
+    width: '100%',
+    paddingHorizontal: 4,
   },
   card: {
     width: '100%',
@@ -438,12 +393,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     overflow: 'hidden',
   },
-  logo: { width: 84, height: 84, marginBottom: 12, borderRadius: 18 },
+  cardSignup: {
+    marginTop: 36,
+    paddingHorizontal: 18,
+    paddingVertical: 22,
+    backgroundColor: '#ffffff',
+  },
+  subtitle: { color: '#6b7280', fontSize: 13, marginBottom: 12, textAlign: 'left', width: '90%' },
+  logo: { width: 180, height: 180, marginBottom: 22, borderRadius: 28 },
+  logoWrap: { width: '100%', alignItems: 'center', marginTop: 8 },
+  bottomPanel: {
+    width: '100%',
+    paddingHorizontal: 22,
+    paddingTop: 10,
+    paddingBottom: 30,
+    backgroundColor: 'transparent',
+  },
   logoPlaceholder: {
-    width: 84,
-    height: 84,
-    marginBottom: 12,
-    borderRadius: 18,
+    width: 180,
+    height: 180,
+    marginBottom: 22,
+    borderRadius: 28,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
@@ -453,8 +423,23 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 6,
   },
+  otpCenterPanel: {
+    width: '100%',
+    paddingHorizontal: 22,
+    paddingVertical: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   logoInitials: { fontSize: 22, fontWeight: '800', color: '#4f46e5' },
   title: {
+    fontSize: Platform.OS === 'ios' ? 28 : 24,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'center',
+    marginBottom: Platform.OS === 'ios' ? 18 : 14,
+    fontFamily: Platform.select({ ios: 'Inter', android: 'normal' }),
+  },
+  titlecentre: {
     fontSize: Platform.OS === 'ios' ? 28 : 24,
     fontWeight: '700',
     color: '#0f172a',
@@ -515,6 +500,16 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   buttonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  // Blue primary button (static)
+  primaryButtonBlue: {
+    marginTop: 12,
+    backgroundColor: '#2563eb',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    width: '100%',
+  },
+  buttonBlueText: { color: '#fff', fontSize: 17, fontWeight: '700' },
   buttonDisabled: { opacity: 0.6 },
   otpTitle: {
     fontSize: 16,
@@ -541,6 +536,15 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(15,23,42,0.06)',
     marginHorizontal: 4,
   },
+  inputUnderline: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    fontSize: 16,
+    borderBottomWidth: 2,
+    borderBottomColor: '#fbb6ce',
+    backgroundColor: 'transparent',
+  },
   otpInputFocused: {
     borderColor: '#4f46e5',
     shadowColor: '#6c5ce7',
@@ -561,6 +565,16 @@ const styles = StyleSheet.create({
   snackbarText: { color: '#fff', fontWeight: '600' },
   snackbarError: { backgroundColor: '#ef4444' },
   snackbarSuccess: { backgroundColor: '#10b981' },
+  // Pink primary used in reference image
+  primaryButtonPink: {
+    marginTop: 18,
+    backgroundColor: '#fb7185',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    width: '100%',
+  },
+  buttonPinkText: { color: '#fff', fontSize: 17, fontWeight: '700' },
   devOtpBox: {
     backgroundColor: 'rgba(15,23,42,0.06)',
     paddingHorizontal: 12,

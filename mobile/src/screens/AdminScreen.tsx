@@ -1295,14 +1295,24 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
 
             {tab === 'helplines' && (
               <View style={{ paddingVertical: 8 }}>
-                <View style={{ marginBottom: 8 }}>
-                  <Button
-                    title="Create Helpline"
+                <View style={{ marginBottom: 12, paddingHorizontal: isMobile ? 6 : 0 }}>
+                  <TouchableOpacity
+                    style={styles.createHelplineBtn}
                     onPress={() => {
                       setNewHelpline({ type: 'ambulance', name: '', phone: '', notes: '' });
                       setShowHelplineModal(true);
                     }}
-                  />
+                    accessibilityRole="button"
+                    accessibilityLabel="Create helpline"
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Ionicons name="add" size={18} color="#fff" />
+                      <Text style={styles.createHelplineBtnText}>Create Helpline</Text>
+                    </View>
+                    <Text style={styles.createHelplineSubtitle} numberOfLines={1}>
+                      Add emergency or service contact
+                    </Text>
+                  </TouchableOpacity>
                 </View>
                 <FlatList
                   data={helplines}
@@ -3110,6 +3120,18 @@ const styles: any = StyleSheet.create({
   helplineNotes: { color: '#6b7280', marginTop: 6, fontSize: 13 },
   helplineActions: { flexDirection: 'row', marginLeft: 8 },
   helplineActionBtn: { padding: 8, marginLeft: 6 },
+  createHelplineBtn: {
+    backgroundColor: '#4f46e5',
+    padding: 12,
+    borderRadius: 10,
+    elevation: 2,
+    shadowColor: 'rgba(0,0,0,0.12)',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+  },
+  createHelplineBtnText: { color: '#fff', fontWeight: '700', marginLeft: 8 },
+  createHelplineSubtitle: { color: 'rgba(255,255,255,0.9)', marginTop: 6, fontSize: 12 },
 
   rowBetween: { flexDirection: 'row', alignItems: 'center' },
   search: {
