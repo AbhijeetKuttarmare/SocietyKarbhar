@@ -154,7 +154,11 @@ export default async function pickAndUploadProfile(): Promise<string | null> {
 
     const dataUrl = `data:${mime || 'image/jpeg'};base64,${base64}`;
     // Prefer direct Cloudinary upload from client when Cloudinary unsigned preset is provided
-    const env = (Constants && (Constants.manifest?.extra || (Constants as any).extra)) || {};
+    const env =
+      (Constants as any)?.manifest?.extra ||
+      (Constants as any)?.extra ||
+      (Constants as any)?.expoConfig?.extra ||
+      {};
     const CLOUDINARY_UPLOAD_URL = env.CLOUDINARY_UPLOAD_URL || env.CLOUDINARY_URL || null;
     const CLOUDINARY_UPLOAD_PRESET = env.CLOUDINARY_UPLOAD_PRESET || null;
 

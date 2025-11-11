@@ -7,6 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Platform } from 'react-native';
 import UserProfileForm from '../components/UserProfileForm';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { notify } from '../services/notifier';
 
 type Props = {
   user: any;
@@ -35,7 +36,10 @@ export default function AdminProfile({
     try {
       // Pick image only and set locally; actual upload will occur when user presses Save
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) return alert('Permission to access photos is required');
+      if (!perm.granted) {
+        notify({ type: 'warning', message: 'Permission to access photos is required' });
+        return;
+      }
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.8,
@@ -43,14 +47,17 @@ export default function AdminProfile({
       const cancelled = (res as any).canceled === true || (res as any).cancelled === true;
       if (cancelled) return;
       const asset = (res as any).assets ? (res as any).assets[0] : (res as any);
-      if (!asset || !asset.uri) return alert('Could not read image data');
+      if (!asset || !asset.uri) {
+        notify({ type: 'error', message: 'Could not read image data' });
+        return;
+      }
       const uri: string = asset.uri;
       // update local profile only; save will persist to server
       setProfile((p: any) => ({ ...(p || {}), avatar: uri }));
       setUserAvatar && setUserAvatar(uri);
     } catch (e) {
       console.warn('admin profile pick failed', e);
-      alert('Could not pick image');
+      notify({ type: 'error', message: 'Could not pick image' });
     }
   };
 
@@ -91,15 +98,12 @@ export default function AdminProfile({
             }
           }
 
-          const token = await (async () => {
-            try {
-              return await (
-                await import('@react-native-async-storage/async-storage')
-              ).default.getItem('token');
-            } catch (e) {
-              return null;
-            }
-          })();
+          let token: string | null = null;
+          try {
+            token = await AsyncStorage.getItem('token');
+          } catch (e) {
+            token = null;
+          }
           const headers: any = {};
           if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -129,7 +133,7 @@ export default function AdminProfile({
           }
         } catch (e) {
           console.warn('avatar upload failed during save', e);
-          alert('Failed to upload avatar');
+          notify({ type: 'error', message: 'Failed to upload avatar' });
         }
       }
 
@@ -167,10 +171,10 @@ export default function AdminProfile({
         // ignore; we already attempted to update
       }
 
-      alert('Profile saved');
+      notify({ type: 'success', message: 'Profile saved' });
     } catch (e) {
       console.warn('saveProfile failed', e);
-      alert('Save failed');
+      notify({ type: 'error', message: 'Save failed' });
     }
   };
 

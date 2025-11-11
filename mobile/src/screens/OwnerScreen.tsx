@@ -9,11 +9,12 @@ import {
   TextInput,
   ScrollView,
   Image,
-  Alert,
   ActivityIndicator,
   Platform,
+  Alert,
   Linking,
 } from 'react-native';
+import { notify } from '../services/notifier';
 // Use dynamic require for DateTimePicker to avoid build-time type errors when package isn't installed
 import { Ionicons } from '@expo/vector-icons';
 // BottomTab removed for OwnerScreen (we render an inline bottom bar here)
@@ -480,7 +481,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
         } catch (e) {
           console.warn('[downloadAgreement] open file failed', e);
         }
-        Alert.alert('Downloaded', `Saved to ${fileUri}`);
+        notify({ type: 'success', message: `Saved to ${fileUri}` });
         return;
       }
 
@@ -493,7 +494,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
         } catch (e) {
           console.warn('[downloadAgreement] open downloaded file failed', e);
         }
-        Alert.alert('Downloaded', `Saved to ${dl.uri}`);
+        notify({ type: 'success', message: `Saved to ${dl.uri}` });
         return;
       } catch (e) {
         console.warn('[downloadAgreement] downloadAsync failed', e);
@@ -508,7 +509,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
     } catch (e) {
       console.warn('downloadAgreement failed', e);
       try {
-        Alert.alert('Download failed', String(e));
+        notify({ type: 'error', message: String(e) });
       } catch (ee) {}
     }
   }

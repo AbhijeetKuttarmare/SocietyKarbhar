@@ -3,6 +3,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEFAULT_HOST, DEFAULT_PORT } from './config';
+import { notify } from './notifier';
 
 function getBaseUrl() {
   // Expo stores config in different places depending on SDK and how app is started.
@@ -10,7 +11,11 @@ function getBaseUrl() {
   const env = c.manifest?.extra || c.extra || c.expoConfig?.extra || {};
 
   // 1) If explicit override provided via extras (app.config.js / app.json or env), use it.
-  if (env.API_BASE_URL) return env.API_BASE_URL;
+  const rawApiBase = (env.API_BASE_URL || '').toString().trim();
+  if (rawApiBase) {
+    if (/^https?:\/\//i.test(rawApiBase)) return rawApiBase;
+    return `http://${rawApiBase}`;
+  }
 
   // 2) Web (browser) -> prefer the developer machine LAN IP (so web builds show same host)
   // Note: explicit env/API_BASE_URL is handled above. For web we prefer DEFAULT_HOST so
@@ -61,11 +66,57 @@ api.interceptors.request.use(async (cfg) => {
 
 // Global response error notifier
 let _errorHandler: ((err: any) => void) | null = null;
+// Response interceptor: notify errors and also surface success notifications for POST-created resources
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    try {
+      const cfg = res && (res.config as any);
+      const method = cfg && cfg.method ? String(cfg.method).toLowerCase() : '';
+      const url = (cfg && cfg.url) || '';
+      // Heuristic: if this was a POST/PUT/PATCH and not an auth endpoint, emit a success notification.
+      if (/^(post|put|patch)$/.test(method) && !/auth|login|otp/i.test(String(url))) {
+        // try to use server-provided message when available
+        const serverMsg = res.data && (res.data.message || res.data.msg || res.data.error || null);
+        // derive a friendly resource name from URL
+        const parts = String(url).split('/').filter(Boolean);
+        const resource = parts.length ? parts[parts.length - 1] : 'item';
+        const title = 'Success';
+        const message = serverMsg || `${resource.replace(/[-_]/g, ' ')} saved successfully`;
+        try {
+          notify({ type: 'success', title, message });
+        } catch (e) {}
+      }
+    } catch (e) {}
+    return res;
+  },
   (err) => {
     try {
+      // Always call attached error handler first so screens can handle specific flows
       if (_errorHandler) _errorHandler(err);
+
+      // Provide a user-visible notification for common error cases on create/update
+      try {
+        const cfg = err && err.config ? (err.config as any) : null;
+        const url = (cfg && cfg.url) || '';
+        // suppress notifications for auth flows (login/otp)
+        if (!/auth|login|otp/i.test(String(url))) {
+          const resp = err && err.response;
+          let message = 'An error occurred';
+          if (resp && resp.data) {
+            message =
+              resp.data.message ||
+              resp.data.error ||
+              resp.data.msg ||
+              JSON.stringify(resp.data) ||
+              message;
+          } else if (err && err.message) {
+            message = err.message;
+          }
+          notify({ type: 'error', title: 'Error', message });
+        }
+      } catch (e) {
+        // noop - don't let notification failures break error propagation
+      }
     } catch (e) {}
     return Promise.reject(err);
   }

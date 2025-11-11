@@ -21,7 +21,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 type Props = { onLogin: (user: any) => void };
 
-export default function LoginScreen({ onLogin }: Props): JSX.Element {
+export default function LoginScreen({ onLogin }: Props): React.ReactElement {
   const [phone, setPhone] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState(['', '', '', '', '', '']); // 6-digit OTP

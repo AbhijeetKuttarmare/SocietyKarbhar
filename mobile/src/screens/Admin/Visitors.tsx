@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../services/api';
+import ProjectListItem from '../../components/ProjectListItem';
 
 type Props = { useAdminApi?: boolean };
 
@@ -52,7 +53,10 @@ export default function VisitorsScreen({ useAdminApi = true }: Props) {
     } catch (e) {
       try {
         const err: any = e;
-        console.warn('[VisitorsScreen] fetchVisitors failed', err && err.response ? err.response.data || err.response : err);
+        console.warn(
+          '[VisitorsScreen] fetchVisitors failed',
+          err && err.response ? err.response.data || err.response : err
+        );
         const status = err && err.response && err.response.status;
         const body = err && err.response && err.response.data;
         const message = (body && (body.error || body.detail)) || err.message || String(err);
@@ -67,7 +71,10 @@ export default function VisitorsScreen({ useAdminApi = true }: Props) {
             return;
           } catch (fe) {
             const feerr: any = fe;
-            console.warn('[VisitorsScreen] fallback failed', feerr && feerr.response ? feerr.response.data || feerr.response : feerr);
+            console.warn(
+              '[VisitorsScreen] fallback failed',
+              feerr && feerr.response ? feerr.response.data || feerr.response : feerr
+            );
             Alert.alert('Failed to load visitors', String(message));
             setVisitors([]);
             return;
@@ -86,33 +93,26 @@ export default function VisitorsScreen({ useAdminApi = true }: Props) {
 
   const renderItem = ({ item }: { item: any }) => {
     const thumb = item.selfie || null;
+    const title = item.mainVisitorName || 'Unknown';
+    const subtitle = `${item.wing && item.wing.name ? item.wing.name + ' • ' : ''}${
+      item.Flat && item.Flat.flat_no ? `Flat ${item.Flat.flat_no}` : ''
+    }`;
+    const reason = item.reason || '';
+    const checkIn = item.checkInTime ? new Date(item.checkInTime).toLocaleString() : '';
+    const people = `People: ${item.numberOfPeople || 1}`;
+    const gate = item.gateId ? `Gate: ${item.gateId}` : undefined;
+
     return (
-      <TouchableOpacity style={styles.card} onPress={() => setDetail(item)}>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          {thumb ? (
-            <Image source={{ uri: thumb }} style={styles.thumb} />
-          ) : (
-            <View style={[styles.thumb, styles.thumbEmpty]}>
-              <Ionicons name="person" size={24} color="#374151" />
-            </View>
-          )}
-          <View style={{ marginLeft: 12, flex: 1 }}>
-            <Text style={styles.name}>{item.mainVisitorName || 'Unknown'}</Text>
-            <Text style={styles.sub} numberOfLines={1}>
-              {item.wing && item.wing.name ? item.wing.name + ' • ' : ''}
-              {item.Flat && item.Flat.flat_no ? `Flat ${item.Flat.flat_no}` : ''}
-            </Text>
-            <Text style={styles.sub}>{item.reason || ''}</Text>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={styles.time}>
-              {item.checkInTime ? new Date(item.checkInTime).toLocaleString() : ''}
-            </Text>
-            <Text style={styles.meta}>People: {item.numberOfPeople || 1}</Text>
-            {item.gateId ? <Text style={styles.meta}>Gate: {item.gateId}</Text> : null}
-          </View>
-        </View>
-      </TouchableOpacity>
+      <ProjectListItem
+        thumbnail={thumb}
+        title={title}
+        subtitle={subtitle}
+        status={reason}
+        amountLabel={people}
+        amountSubLabel={gate}
+        date={checkIn}
+        onPress={() => setDetail(item)}
+      />
     );
   };
 

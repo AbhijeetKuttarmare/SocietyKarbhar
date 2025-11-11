@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, TextInput } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts } from 'expo-font';
-import * as Font from 'expo-font';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+const IONICONS_FONT = require('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf');
+const MATERIAL_ICONS_FONT = require('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialIcons.ttf');
+const FEATHER_FONT = require('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Feather.ttf');
 import api, { setAuthHeader, setToken } from './src/services/api';
 import LoginScreen from './src/screens/LoginScreen';
 import SuperadminScreen from './src/screens/SuperadminScreen';
@@ -12,14 +14,39 @@ import AdminScreen from './src/screens/AdminScreen';
 import OwnerScreen from './src/screens/OwnerScreen';
 import TenantScreen from './src/screens/TenantScreen';
 import SecurityGuardScreen from './src/screens/SecurityGuardScreen';
-import CCTVScreen from './src/screens/CCTVScreen';
 import BottomTab from './src/components/BottomTab';
 import { BottomTabProvider, BottomTabContext } from './src/contexts/BottomTabContext';
+import NotificationProvider from './src/components/NotificationProvider';
+
+// Ensure placeholder text color defaults to black across devices where the
+// default platform placeholder color can appear white and be hard to read.
+// This sets a global default for all TextInput instances that don't override
+// placeholderTextColor. It's intentionally defensive to avoid runtime errors.
+try {
+  if (TextInput) {
+    // use an any-cast to avoid TypeScript complaints about defaultProps
+    (TextInput as any).defaultProps = {
+      ...((TextInput as any).defaultProps || {}),
+      placeholderTextColor: '#000',
+    };
+  }
+} catch (e) {
+  // noop - if setting defaultProps isn't supported on some RN versions, ignore
+}
 
 export default function App() {
   const [user, setUser] = useState<any | null>(null);
 
   const [restored, setRestored] = useState(false);
+  const [fontsLoaded, fontsError] = useFonts({
+    Ionicons: IONICONS_FONT,
+    MaterialIcons: MATERIAL_ICONS_FONT,
+    Feather: FEATHER_FONT,
+  });
+
+  useEffect(() => {
+    if (fontsError) console.warn('icon fonts failed to load', fontsError);
+  }, [fontsError]);
 
   useEffect(() => {
     // restore user and token from AsyncStorage so hot reloads / refreshes keep the session
@@ -75,37 +102,39 @@ export default function App() {
     setUser(null);
   }
 
-  if (!restored) {
+  if (!restored || !fontsLoaded) {
     // while restoring session from storage, avoid rendering login to prevent flicker/logout
     return <SafeAreaView style={styles.container} />;
   }
 
   return (
     <SafeAreaProvider>
-      <BottomTabProvider>
-        <SafeAreaView style={styles.container}>
-          {!user ? (
-            <LoginScreen onLogin={handleLogin} />
-          ) : (
-            (() => {
-              const role = user?.role;
-              if (role === 'superadmin')
-                return <SuperadminScreen user={user} onLogout={handleLogout} />;
-              if (role === 'admin')
-                return <AdminScreen user={user} onLogout={handleLogout} setUser={setUser} />;
-              if (role === 'security_guard')
-                return <SecurityGuardScreen user={user} onLogout={handleLogout} />;
-              if (role === 'owner') return <OwnerScreen user={user} onLogout={handleLogout} />;
-              if (role === 'tenant') return <TenantScreen user={user} onLogout={handleLogout} />;
-              return <TenantScreen user={user} onLogout={handleLogout} />;
-            })()
-          )}
-          {/* Global bottom tab - fixed across all screens. Owner has an inline bottom bar
+      <NotificationProvider>
+        <BottomTabProvider>
+          <SafeAreaView style={styles.container}>
+            {!user ? (
+              <LoginScreen onLogin={handleLogin} />
+            ) : (
+              (() => {
+                const role = user?.role;
+                if (role === 'superadmin')
+                  return <SuperadminScreen user={user} onLogout={handleLogout} />;
+                if (role === 'admin')
+                  return <AdminScreen user={user} onLogout={handleLogout} setUser={setUser} />;
+                if (role === 'security_guard')
+                  return <SecurityGuardScreen user={user} onLogout={handleLogout} />;
+                if (role === 'owner') return <OwnerScreen user={user} onLogout={handleLogout} />;
+                if (role === 'tenant') return <TenantScreen user={user} onLogout={handleLogout} />;
+                return <TenantScreen user={user} onLogout={handleLogout} />;
+              })()
+            )}
+            {/* Global bottom tab - fixed across all screens. Owner has an inline bottom bar
         inside OwnerScreen, so avoid rendering the global bar for owners to prevent
         duplicate / overlapping tabs. */}
-          {user && user.role !== 'owner' ? <BottomTabWrapper user={user} /> : null}
-        </SafeAreaView>
-      </BottomTabProvider>
+            {user && user.role !== 'owner' ? <BottomTabWrapper user={user} /> : null}
+          </SafeAreaView>
+        </BottomTabProvider>
+      </NotificationProvider>
     </SafeAreaProvider>
   );
 }

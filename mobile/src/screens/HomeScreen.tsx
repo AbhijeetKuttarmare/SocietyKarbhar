@@ -3,7 +3,7 @@ import { View, Text, Button, StyleSheet } from 'react-native';
 
 type Props = { user: any; onLogout: () => void };
 
-export default function HomeScreen({ user, onLogout }: Props): JSX.Element {
+export default function HomeScreen({ user, onLogout }: Props): React.ReactElement {
   return (
     <View style={styles.container}>
       <Text style={styles.welcome}>Welcome, {user?.name || 'User'}</Text>
@@ -17,5 +17,5 @@ export default function HomeScreen({ user, onLogout }: Props): JSX.Element {
 
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  welcome: { fontSize: 22, marginBottom: 8 }
+  welcome: { fontSize: 22, marginBottom: 8 },
 });

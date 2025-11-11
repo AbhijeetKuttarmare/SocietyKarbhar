@@ -8,11 +8,14 @@ import {
   StyleSheet,
   Switch,
   Alert,
+  Image,
   ActivityIndicator,
 } from 'react-native';
 import api from '../services/api';
+import ConfirmBox from '../components/ConfirmBox';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 import { Ionicons } from '@expo/vector-icons';
+import { notify } from '../services/notifier';
 
 type Props = {
   buildings?: any[];
@@ -49,6 +52,8 @@ export default function StaffManagement(props: Props) {
   const [wingId, setWingId] = useState<string | null>(null);
   const [status, setStatus] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
 
   useEffect(() => {
     fetchStaff();
@@ -85,9 +90,14 @@ export default function StaffManagement(props: Props) {
   }
 
   async function createStaff() {
-    if (!name) return Alert.alert('Name required');
-    if (staffType === 'Security Guards' && !aadhaarUrl)
-      return Alert.alert('Please upload Aadhaar card for security guards');
+    if (!name) {
+      notify({ type: 'warning', message: 'Name required' });
+      return;
+    }
+    if (staffType === 'Security Guards' && !aadhaarUrl) {
+      notify({ type: 'warning', message: 'Please upload Aadhaar card for security guards' });
+      return;
+    }
     try {
       setSubmitting(true);
       const payload: any = {
@@ -106,7 +116,7 @@ export default function StaffManagement(props: Props) {
       setPhone('');
       setWingId(null);
       setStatus(true);
-      Alert.alert('Staff Added Successfully');
+      notify({ type: 'success', message: 'Staff Added Successfully' });
       // if parent controls add form, notify parent to close it
       if (onAddToggle) onAddToggle(false);
       setShowAddForm(false);
@@ -119,51 +129,91 @@ export default function StaffManagement(props: Props) {
           (err as any).response.data &&
           (err as any).response.data.error) ||
         'Failed to add staff';
-      Alert.alert(msg);
+      notify({ type: 'error', message: String(msg) });
     } finally {
       setSubmitting(false);
     }
   }
 
   async function deleteStaff(id: string) {
-    try {
-      Alert.alert('Confirm', 'Delete this staff member?', [
-        { text: 'Cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.delete('/api/admin/staff/' + id);
-              fetchStaff();
-            } catch (e) {
-              console.warn('delete staff failed', e);
-              Alert.alert('Delete failed');
-            }
-          },
-        },
-      ]);
-    } catch (e) {
-      console.warn(e);
-    }
+    // open confirm modal
+    setConfirmTarget(id);
+    setConfirmVisible(true);
   }
 
-  const renderItem = ({ item }: any) => (
-    <View style={styles.listItem}>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.listTitle}>{item.name}</Text>
-        <Text style={styles.listSub}>
-          {item.staffType || ''} • {item.phone || ''}
-        </Text>
+  const runDeleteConfirmed = async () => {
+    if (!confirmTarget) return;
+    try {
+      setConfirmVisible(false);
+      await api.delete('/api/admin/staff/' + confirmTarget);
+      fetchStaff();
+    } catch (e) {
+      console.warn('delete staff failed', e);
+      notify({ type: 'error', message: 'Delete failed' });
+    } finally {
+      setConfirmTarget(null);
+    }
+  };
+
+  const renderItem = ({ item }: any) => {
+    const avatarUri =
+      item?.avatar || item?.image || item?.photo || item?.profile_pic || item?.image_url || null;
+    const initials = (item?.name || item?.phone || '')
+      .split(' ')
+      .map((p: string) => p[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+
+    return (
+      <View style={styles.staffCard}>
+        <View style={styles.avatarWrap}>
+          {avatarUri ? (
+            <Image source={{ uri: avatarUri } as any} style={styles.avatar} />
+          ) : (
+            <View style={styles.avatarFallback}>
+              <Text style={{ fontWeight: '700', color: '#1f2937' }}>{initials}</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={styles.staffName}>{item.name}</Text>
+          <Text style={styles.staffMeta} numberOfLines={1}>
+            {item.staffType || 'Staff'} • {item.phone || '—'}
+          </Text>
+
+          <View style={{ flexDirection: 'row', marginTop: 8, alignItems: 'center' }}>
+            <View style={styles.roleBadge}>
+              <Text style={styles.roleText}>
+                {item.staffType ? item.staffType.split(' ')[0] : 'Staff'}
+              </Text>
+            </View>
+            <Text style={{ marginLeft: 10, color: '#6b7280' }}>{item.wingName || ''}</Text>
+          </View>
+        </View>
+
+        <View style={{ alignItems: 'flex-end' }}>
+          <View
+            style={[
+              styles.statusBadge,
+              item.status && String(item.status).toLowerCase() === 'active'
+                ? styles.statusActive
+                : styles.statusInactive,
+            ]}
+          >
+            <Text style={styles.statusText}>{item.status || '—'}</Text>
+          </View>
+
+          <View style={{ flexDirection: 'row', marginTop: 12 }}>
+            <TouchableOpacity onPress={() => deleteStaff(item.id)} style={styles.iconBtn}>
+              <Ionicons name="trash-outline" size={18} color="#ef4444" />
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <Text style={{ marginRight: 8 }}>{item.status}</Text>
-        <TouchableOpacity onPress={() => deleteStaff(item.id)} style={styles.iconBtn}>
-          <Ionicons name="trash-outline" size={18} color="#ff6b6b" />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+    );
+  };
 
   const filtered = staff.filter((s) => {
     if (!q) return true;
@@ -262,7 +312,7 @@ export default function StaffManagement(props: Props) {
                       if (url) setAadhaarUrl(url);
                     } catch (e) {
                       console.warn('aadhaar upload failed', e);
-                      Alert.alert('Upload failed');
+                      notify({ type: 'error', message: 'Upload failed' });
                     } finally {
                       setAadhaarUploading(false);
                     }
@@ -329,6 +379,19 @@ export default function StaffManagement(props: Props) {
           contentContainerStyle={{ paddingBottom: 96 }}
         />
       )}
+      <ConfirmBox
+        visible={confirmVisible}
+        title="Delete this staff?"
+        message="This staff member will be permanently removed and cannot be recovered."
+        danger
+        onCancel={() => {
+          setConfirmVisible(false);
+          setConfirmTarget(null);
+        }}
+        onConfirm={runDeleteConfirmed}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+      />
     </View>
   );
 }
@@ -351,6 +414,51 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 8,
   },
+  staffCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    marginBottom: 10,
+    // shadow
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+  },
+  avatarWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    overflow: 'hidden',
+    backgroundColor: '#eef2ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatar: { width: 56, height: 56, borderRadius: 28, resizeMode: 'cover' },
+  avatarFallback: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  staffName: { fontWeight: '800', fontSize: 15, color: '#111' },
+  staffMeta: { color: '#6b7280', marginTop: 4 },
+  roleBadge: {
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  roleText: { color: '#4f46e5', fontWeight: '700', fontSize: 12 },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+  statusActive: { backgroundColor: '#ECFDF5' },
+  statusInactive: { backgroundColor: '#FEF3F2' },
+  statusText: { fontWeight: '700', color: '#065f46' },
   listTitle: { fontWeight: '700' },
   listSub: { color: '#6b7280' },
   iconBtn: { padding: 8 },

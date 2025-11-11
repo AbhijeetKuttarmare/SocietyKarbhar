@@ -7,7 +7,6 @@ import {
   FlatList,
   TextInput,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
   Modal,
   ScrollView,
@@ -19,6 +18,7 @@ import * as ImagePicker from 'expo-image-picker';
 import api, { testConnectivity } from '../services/api';
 import { defaultBaseUrl } from '../services/config';
 import ProfileCard from '../components/ProfileCard';
+import { notify } from '../services/notifier';
 import { Linking } from 'react-native';
 import pickAndUploadProfile from '../services/uploadProfile';
 import DashboardScreen from './Superadmin/DashboardScreen';
@@ -75,6 +75,12 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
     (user as any)?.avatar || (user as any)?.image
   );
+  // confirm dialog state for destructive actions
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
+  const [confirmTitle, setConfirmTitle] = useState<string>('Are you sure?');
+  const [confirmMessage, setConfirmMessage] = useState<string>('');
+  const [confirmDanger, setConfirmDanger] = useState<boolean>(true);
 
   // Debug: log render and active tab to help diagnose blank screen issues
   useEffect(() => {
@@ -145,7 +151,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       const res = await api.get('/api/superadmin/societies', { headers });
       setSocieties(res.data.societies || []);
     } catch (err: any) {
-      Alert.alert('Error', 'Could not load societies');
+      notify({ type: 'error', message: 'Could not load societies' });
     } finally {
       setLoading(false);
     }
@@ -200,10 +206,13 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       });
       const jd = await r.json().catch(() => ({} as any));
       console.debug('[SuperadminScreen] test upload result', r.status, jd);
-      Alert.alert('Connectivity test', `ping=${ping.status} upload=${r.status}`);
+      notify({
+        type: 'info',
+        message: `Connectivity test: ping=${ping.status} upload=${r.status}`,
+      });
     } catch (e: any) {
       console.warn('[SuperadminScreen] connectivity test failed', e);
-      Alert.alert('Connectivity test failed', e?.message || String(e));
+      notify({ type: 'error', message: `Connectivity test failed: ${e?.message || String(e)}` });
     }
   };
 
@@ -215,21 +224,27 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
         const conn = await testConnectivity();
         if (!conn.ok) {
           console.warn('[SuperadminScreen] connectivity test failed', conn.error);
-          return Alert.alert('Network', `Cannot reach backend: ${conn.error}`);
+          notify({ type: 'error', message: `Cannot reach backend: ${conn.error}` });
+          return;
         }
       } catch (e) {
         // ignore - proceed to actual upload attempt
       }
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted)
-        return Alert.alert('Permission required', 'Permission to access photos is required');
+      if (!perm.granted) {
+        notify({ type: 'warning', message: 'Permission to access photos is required' });
+        return;
+      }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images',
         quality: 0.8,
       });
       if ((result as any).canceled || (result as any).cancelled) return;
       const asset = (result as any).assets ? (result as any).assets[0] : (result as any);
-      if (!asset || !asset.uri) return Alert.alert('Error', 'Could not read image data');
+      if (!asset || !asset.uri) {
+        notify({ type: 'error', message: 'Could not read image data' });
+        return;
+      }
       const uri: string = asset.uri;
       const name = uri.split('/').pop() || 'photo.jpg';
       const lower = name.toLowerCase();
@@ -249,7 +264,10 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       const r = await fetch(uploadUrl, { method: 'POST', body: formData, headers: fetchHeaders });
       const res = await r.json().catch(() => ({} as any));
       const url = res && res.url ? res.url : '';
-      if (!url) return Alert.alert('Error', 'Upload did not return a URL');
+      if (!url) {
+        notify({ type: 'error', message: 'Upload did not return a URL' });
+        return;
+      }
       setForm((prev) => ({ ...prev, image_url: url }));
     } catch (e: any) {
       console.error('image upload failed', e);
@@ -257,12 +275,15 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
         if (typeof e.toJSON === 'function') console.error('axios error json', e.toJSON());
       } catch (ee) {}
       const msg = e?.message || String(e);
-      Alert.alert('Error', `Image upload failed: ${msg}`);
+      notify({ type: 'error', message: `Image upload failed: ${msg}` });
     }
   };
 
   const handleAddSociety = async () => {
-    if (!form.name) return Alert.alert('Validation', 'Name is required');
+    if (!form.name) {
+      notify({ type: 'warning', message: 'Name is required' });
+      return;
+    }
     try {
       setLoading(true);
       const headers: any = {};
@@ -280,7 +301,8 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
         image_url: '',
       });
     } catch (err: any) {
-      Alert.alert('Error', 'Failed to create society');
+      console.warn('Failed to create society', err);
+      notify({ type: 'error', message: 'Failed to create society' });
     } finally {
       setLoading(false);
     }
@@ -317,15 +339,17 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       });
       setModalVisible(true);
     } catch (err: any) {
-      Alert.alert('Error', 'Could not load society details');
+      notify({ type: 'error', message: 'Could not load society details' });
     } finally {
       setLoading(false);
     }
   };
   const handleCreateAdmin = async () => {
     if (!creatingAdminFor) return;
-    if (!adminForm.phone || !adminForm.name)
-      return Alert.alert('Validation', 'Name and phone required');
+    if (!adminForm.phone || !adminForm.name) {
+      notify({ type: 'warning', message: 'Name and phone required' });
+      return;
+    }
     try {
       setLoading(true);
       const headers: any = {};
@@ -340,7 +364,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
         societyId: creatingAdminFor.id,
       };
       const r = await api.post('/api/superadmin/admins', payload, { headers });
-      Alert.alert('Success', 'Admin created');
+      // Success handled globally by NotificationProvider through axios interceptor
       // Refresh societies so the newly created admin is wired into the society record shown in UI
       try {
         await fetchSocieties();
@@ -359,7 +383,8 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       });
       // If API returned the created admin, we could also merge it into societies state, but fetch does that
     } catch (err: any) {
-      Alert.alert('Error', 'Failed to create admin');
+      console.warn('Failed to create admin', err);
+      notify({ type: 'error', message: 'Failed to create admin' });
     } finally {
       setLoading(false);
     }
@@ -367,8 +392,10 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
 
   const handleUpdateAdmin = async () => {
     if (!editingAdmin) return;
-    if (!adminForm.phone || !adminForm.name)
-      return Alert.alert('Validation', 'Name and phone required');
+    if (!adminForm.phone || !adminForm.name) {
+      notify({ type: 'warning', message: 'Name and phone required' });
+      return;
+    }
     try {
       setLoading(true);
       const headers: any = {};
@@ -382,7 +409,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
         avatar: adminForm.avatar,
       };
       const r = await api.put(`/api/superadmin/admins/${editingAdmin.id}`, payload, { headers });
-      Alert.alert('Success', 'Admin updated');
+      // Success handled by global notifier
       // refresh admins list
       try {
         await fetchAdmins();
@@ -398,33 +425,36 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       });
     } catch (err: any) {
       console.warn('update admin failed', err);
-      Alert.alert('Error', 'Failed to update admin');
+      notify({ type: 'error', message: 'Failed to update admin' });
     } finally {
       setLoading(false);
     }
   };
 
   const handleDeleteServer = async (id: string) => {
-    Alert.alert('Confirm', 'Delete society?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            setLoading(true);
-            const headers: any = {};
-            if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
-            await api.delete(`/api/superadmin/societies/${id}`, { headers });
-            setSocieties((s) => s.filter((x) => x.id !== id));
-          } catch (err: any) {
-            Alert.alert('Error', 'Failed to delete');
-          } finally {
-            setLoading(false);
-          }
-        },
-      },
-    ]);
+    // Open our confirm modal and store target id
+    setConfirmTarget(id);
+    setConfirmTitle('Delete this society?');
+    setConfirmMessage('This society will be permanently deleted and cannot be recovered.');
+    setConfirmDanger(true);
+    setConfirmVisible(true);
+  };
+
+  const runDeleteConfirmed = async () => {
+    if (!confirmTarget) return;
+    try {
+      setConfirmVisible(false);
+      setLoading(true);
+      const headers: any = {};
+      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
+      await api.delete(`/api/superadmin/societies/${confirmTarget}`, { headers });
+      setSocieties((s) => s.filter((x) => x.id !== confirmTarget));
+    } catch (err: any) {
+      console.warn('delete failed', err);
+    } finally {
+      setLoading(false);
+      setConfirmTarget(null);
+    }
   };
 
   const handleEditSave = async () => {
@@ -449,7 +479,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
         image_url: '',
       });
     } catch (err: any) {
-      Alert.alert('Error', 'Failed to update');
+      console.warn('Failed to update society', err);
     } finally {
       setLoading(false);
     }
@@ -567,7 +597,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
             <View style={styles.topIcons}>
               <TouchableOpacity
                 style={styles.iconButton}
-                onPress={() => Alert.alert('Notifications', 'No notifications')}
+                onPress={() => notify({ type: 'info', message: 'No notifications' })}
               >
                 <MaterialIcons name="notifications-none" size={18} color="#111" />
               </TouchableOpacity>
@@ -577,6 +607,20 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
               </TouchableOpacity>
             </View>
           </View>
+          {/* Global confirm modal used for destructive actions */}
+          <ConfirmBox
+            visible={confirmVisible}
+            title={confirmTitle}
+            message={confirmMessage}
+            danger={confirmDanger}
+            onCancel={() => {
+              setConfirmVisible(false);
+              setConfirmTarget(null);
+            }}
+            onConfirm={runDeleteConfirmed}
+            confirmLabel={confirmDanger ? 'Delete' : 'Confirm'}
+            cancelLabel="Cancel"
+          />
 
           {/* Content area */}
           <View style={{ flex: 1 }}>
@@ -787,7 +831,9 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                               )}
                               <TouchableOpacity
                                 style={{ padding: 8 }}
-                                onPress={() => Alert.alert('View', `Open ${s.name} details`)}
+                                onPress={() =>
+                                  notify({ type: 'info', message: `Open ${s.name} details` })
+                                }
                               >
                                 <Feather name="eye" size={18} color="#6b7280" />
                               </TouchableOpacity>
@@ -1210,7 +1256,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                     } catch (e: any) {
                       setAdminUploading(false);
                       console.warn('admin profile upload failed', e);
-                      Alert.alert('Upload failed', e?.message || 'Upload failed');
+                      notify({ type: 'error', message: e?.message || 'Upload failed' });
                     }
                   }}
                 >
@@ -1293,7 +1339,13 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                     try {
                       // Request permission and pick image
                       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                      if (!perm.granted) return alert('Permission to access photos is required');
+                      if (!perm.granted) {
+                        notify({
+                          type: 'warning',
+                          message: 'Permission to access photos is required',
+                        });
+                        return;
+                      }
                       const res = await ImagePicker.launchImageLibraryAsync({
                         mediaTypes: ImagePicker.MediaTypeOptions.Images,
                         quality: 0.8,
@@ -1302,7 +1354,10 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                         (res as any).canceled === true || (res as any).cancelled === true;
                       if (cancelled) return; // user cancelled
                       const asset = (res as any).assets ? (res as any).assets[0] : (res as any);
-                      if (!asset || !asset.uri) return alert('Could not read image data');
+                      if (!asset || !asset.uri) {
+                        notify({ type: 'error', message: 'Could not read image data' });
+                        return;
+                      }
 
                       const uri: string = asset.uri;
                       const name = uri.split('/').pop() || 'photo.jpg';
@@ -1365,18 +1420,25 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                           jd && (jd.error || jd.detail)
                             ? jd.error || jd.detail
                             : `status=${r.status}`;
-                        return alert('Upload failed: ' + String(msg));
+                        notify({ type: 'error', message: 'Upload failed: ' + String(msg) });
+                        return;
                       }
                       // Backend returns updated user record
                       const updatedUser = jd && jd.user ? jd.user : null;
                       const avatarUrl = updatedUser?.avatar || (jd && jd.url) || null;
-                      if (!avatarUrl) return alert('Upload succeeded but no avatar URL returned');
+                      if (!avatarUrl) {
+                        notify({
+                          type: 'error',
+                          message: 'Upload succeeded but no avatar URL returned',
+                        });
+                        return;
+                      }
                       setUserAvatar(avatarUrl);
-                      alert('Profile photo updated');
+                      notify({ type: 'success', message: 'Profile photo updated' });
                     } catch (e: any) {
                       console.warn('superadmin profile upload failed', e);
                       const msg = e?.message || String(e);
-                      alert('Upload failed: ' + msg);
+                      notify({ type: 'error', message: 'Upload failed: ' + msg });
                     }
                   }}
                   onCall={(p) => {
@@ -1407,3 +1469,4 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
 }
 
 import styles from '../styles/superadminStyles';
+import ConfirmBox from '../components/ConfirmBox';

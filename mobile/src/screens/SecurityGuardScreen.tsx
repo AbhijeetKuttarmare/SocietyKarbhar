@@ -7,13 +7,13 @@ import {
   TextInput,
   FlatList,
   Modal,
-  Alert,
   Image,
   Linking,
   ActivityIndicator,
   ScrollView,
   Platform,
 } from 'react-native';
+import { notify } from '../services/notifier';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import api from '../services/api';
@@ -104,7 +104,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
                   // Navigate to Notifications screen if available
                   navigation.navigate && navigation.navigate('Notifications');
                 } catch (e) {
-                  Alert.alert('Notifications', 'Notifications screen not available');
+                  notify({ type: 'info', message: 'Notifications screen not available' });
                 }
               }}
             >
@@ -126,7 +126,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
                     navigation.navigate('Login');
                   }
                 } catch (e) {
-                  Alert.alert('Logout', 'Logout failed');
+                  notify({ type: 'error', message: 'Logout failed' });
                 }
               }}
             >
@@ -304,7 +304,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
   // Open configured Google Form or provided link
   function openFormLink() {
     const formUrl = (profile && profile.formUrl) || 'https://docs.google.com/forms';
-    Linking.openURL(formUrl).catch(() => Alert.alert('Failed to open form'));
+    Linking.openURL(formUrl).catch(() => notify({ type: 'error', message: 'Failed to open form' }));
   }
 
   async function pickSelfie() {
@@ -315,7 +315,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
       if (!cancelled && asset && asset.base64)
         setSelfieBase64(`data:image/jpg;base64,${asset.base64}`);
     } catch (e) {
-      Alert.alert('Camera error', String(e));
+      notify({ type: 'error', message: 'Camera error: ' + String(e) });
     }
   }
 
@@ -337,14 +337,16 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
           setAdditionalSelfies((s) => [...s, `data:image/jpg;base64,${asset.base64}`]);
       }
     } catch (e) {
-      Alert.alert('Pick photo error', String(e));
+      notify({ type: 'error', message: 'Pick photo error: ' + String(e) });
     }
   }
 
   async function submitManualVisitor() {
     // require a name and at least one of flat or wing; additional visitors are optional
-    if (!manualName || (!manualFlat && !manualWing))
-      return Alert.alert('Please fill visitor name and select wing or flat');
+    if (!manualName || (!manualFlat && !manualWing)) {
+      notify({ type: 'warning', message: 'Please fill visitor name and select wing or flat' });
+      return;
+    }
     setSubmitting(true);
     try {
       const payload: any = {
@@ -361,7 +363,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
       // POST to user-provided endpoint
       const r = await api.post('/api/visitors', payload);
       if (r && r.data && (r.data.visitor || r.data.id)) {
-        Alert.alert('Visitor ID generated successfully');
+        notify({ type: 'success', message: 'Visitor ID generated successfully' });
         // reset form
         setManualName('');
         setManualFlat('');
@@ -375,7 +377,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
         fetchCounts();
         fetchInsideVisitors();
       } else {
-        Alert.alert('Added', 'Visitor added (no id returned)');
+        notify({ type: 'info', message: 'Visitor added (no id returned)' });
       }
     } catch (e: any) {
       try {
@@ -391,7 +393,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
           (e.response.data.error || JSON.stringify(e.response.data))) ||
         e.message ||
         String(e);
-      Alert.alert('Submit failed', backendMsg);
+      notify({ type: 'error', message: String(backendMsg) });
     } finally {
       setSubmitting(false);
     }
@@ -404,7 +406,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
       fetchCounts();
       fetchInsideVisitors();
     } catch (e) {
-      Alert.alert('Checkout failed', String(e));
+      notify({ type: 'error', message: 'Checkout failed: ' + String(e) });
     }
   }
 
@@ -443,7 +445,10 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
   const onEditAvatar = async () => {
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) return Alert.alert('Permission to access photos is required');
+      if (!perm.granted) {
+        notify({ type: 'warning', message: 'Permission to access photos is required' });
+        return;
+      }
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.8,
@@ -451,12 +456,15 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
       const cancelled = (res as any).canceled === true || (res as any).cancelled === true;
       if (cancelled) return;
       const asset = (res as any).assets ? (res as any).assets[0] : (res as any);
-      if (!asset || !asset.uri) return Alert.alert('Could not read image data');
+      if (!asset || !asset.uri) {
+        notify({ type: 'error', message: 'Could not read image data' });
+        return;
+      }
       const uri: string = asset.uri;
       setProfile((p: any) => ({ ...(p || {}), avatar: uri }));
     } catch (e) {
       console.warn('pick avatar failed', e);
-      Alert.alert('Could not pick image');
+      notify({ type: 'error', message: 'Could not pick image' });
     }
   };
 
@@ -533,10 +541,10 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
         }
       } catch (e) {}
 
-      Alert.alert('Profile saved');
+      notify({ type: 'success', message: 'Profile saved' });
     } catch (e) {
       console.warn('saveProfile failed', e);
-      Alert.alert('Save failed');
+      notify({ type: 'error', message: 'Save failed' });
     }
   };
 
@@ -564,7 +572,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
               try {
                 navigation && navigation.navigate && navigation.navigate('Notifications');
               } catch (e) {
-                Alert.alert('Notifications', 'Notifications screen not available');
+                notify({ type: 'info', message: 'Notifications screen not available' });
               }
             }}
           >
@@ -862,7 +870,11 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
                                         <TouchableOpacity
                                           style={styles.userItem}
                                           onPress={() => {
-                                            Alert.alert(u?.name || 'User', u?.phone || 'No phone');
+                                            notify({
+                                              type: 'info',
+                                              title: u?.name || 'User',
+                                              message: u?.phone || 'No phone',
+                                            });
                                           }}
                                         >
                                           <View style={styles.userAvatarWrap}>
@@ -1070,7 +1082,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
                   try {
                     Linking.openURL(String(guardFeedRtsp));
                   } catch (e) {
-                    Alert.alert('Open failed', 'Could not open URL');
+                    notify({ type: 'error', message: 'Could not open URL' });
                   }
                 }}
               >

@@ -5,10 +5,10 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   useWindowDimensions,
   Image,
 } from 'react-native';
+import { notify } from '../../services/notifier';
 import api from '../../services/api';
 import { Feather } from '@expo/vector-icons';
 import styles from '../../styles/superadminStyles';
@@ -59,7 +59,7 @@ export default function SocietiesScreen({ user, navigation }: Props) {
       const res = await api.get('/api/superadmin/societies', { headers });
       setSocieties(res.data.societies || []);
     } catch (err: any) {
-      Alert.alert('Error', 'Could not load societies');
+      notify({ type: 'error', message: 'Could not load societies' });
     } finally {
       setLoading(false);
     }
@@ -67,7 +67,7 @@ export default function SocietiesScreen({ user, navigation }: Props) {
 
   const openCreateAdmin = (soc: Society) => {
     // Navigate to admin creation flow in-app or show modal — simplified here
-    Alert.alert('Create Admin', `Open create admin for ${soc.name}`);
+    notify({ type: 'info', message: `Open create admin for ${soc.name}` });
   };
 
   return (

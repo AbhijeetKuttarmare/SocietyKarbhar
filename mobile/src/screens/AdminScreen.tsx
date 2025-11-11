@@ -4,12 +4,11 @@ import {
   Text,
   Switch,
   Button,
+  Modal,
+  TouchableOpacity,
   StyleSheet,
   FlatList,
   TextInput,
-  TouchableOpacity,
-  Modal,
-  Dimensions,
   ScrollView,
   ActivityIndicator,
   Animated,
@@ -24,7 +23,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import api from '../services/api';
 import { defaultBaseUrl } from '../services/config';
 import { Ionicons } from '@expo/vector-icons';
+import ConfirmBox from '../components/ConfirmBox';
 import { BottomTabContext } from '../contexts/BottomTabContext';
+import { notify } from '../services/notifier';
+import ProjectListItem from '../components/ProjectListItem';
+import PopupBox from '../components/PopupBox';
 // Use legacy expo-file-system API for compatibility with readAsStringAsync usage
 import * as FileSystem from 'expo-file-system/legacy';
 import ProfileCard from '../components/ProfileCard';
@@ -91,17 +94,24 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
   const [tab2, setTab2] = useState<'wings' | 'logs'>('wings');
   const [q, setQ] = useState('');
   const [showHelplineModal, setShowHelplineModal] = useState(false);
-  const [newHelpline, setNewHelpline] = useState({
+  const [newHelpline, setNewHelpline] = useState<any>({
     type: 'ambulance',
     name: '',
     phone: '',
     notes: '',
   });
+  // confirm dialog state for destructive actions (delete helpline etc.)
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
+  const [confirmTitle, setConfirmTitle] = useState<string>('Are you sure?');
+  const [confirmMessage, setConfirmMessage] = useState<string>('');
+  const [confirmDanger, setConfirmDanger] = useState<boolean>(true);
   const [showUserModal, setShowUserModal] = useState(false);
   const [showAddFlatModal, setShowAddFlatModal] = useState(false);
   const [newFlat, setNewFlat] = useState({ flat_no: '', buildingId: '' });
   const [showAddWingModal, setShowAddWingModal] = useState(false);
   const [newWing, setNewWing] = useState({ name: '', number_of_floors: '1', flats_per_floor: '1' });
+  const [popupForm, setPopupForm] = useState<'wing' | 'flat'>('wing');
   const [showAssignModal, setShowAssignModal] = useState(false);
   // navigate to staff tab instead of modal
   const [assignStep, setAssignStep] = useState(1);
@@ -428,10 +438,8 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
     try {
       const r = await api.post('/api/admin/maintenance-settings', { amount });
       setMaintenanceSettingState(r.data.setting);
-      alert('Maintenance amount saved');
     } catch (e) {
       console.warn('save maintenance setting failed', e);
-      alert('Failed to save');
     }
   }
 
@@ -442,24 +450,22 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
       if (amount !== undefined) payload.amount = amount;
       if (ownersOnly !== undefined) payload.ownersOnly = !!ownersOnly;
       const r = await api.post('/api/admin/generate-monthly-maintenance', payload);
-      alert('Generated: ' + (r.data.created || 0) + ', skipped: ' + (r.data.skipped || 0));
+      // success notifications are shown globally by the api interceptor
       // refresh list
       fetchMaintenanceFees(month || maintenanceMonth || undefined, 'all');
     } catch (e) {
       console.warn('generate monthly failed', e);
-      alert('Generate failed');
     }
   }
 
   async function adminVerifyBill(billId: string, action: 'approve' | 'reject') {
     try {
       const r = await api.post('/api/admin/bills/' + billId + '/verify', { action });
-      alert('Updated bill status');
+      // response notifier will show success message
       // refresh
       fetchMaintenanceFees(maintenanceMonth || undefined, 'all');
     } catch (e) {
       console.warn('admin verify failed', e);
-      alert('Failed to update');
     }
   }
 
@@ -495,14 +501,28 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
     }
   }
   async function deleteHelpline(id: string) {
+    // Open confirm modal instead of deleting immediately
+    setConfirmTarget(id);
+    setConfirmTitle('Delete this helpline?');
+    setConfirmMessage('This helpline will be permanently removed and cannot be recovered.');
+    setConfirmDanger(true);
+    setConfirmVisible(true);
+  }
+
+  const runDeleteConfirmed = async () => {
+    if (!confirmTarget) return;
     try {
-      await api.delete('/api/admin/helplines/' + id);
+      setConfirmVisible(false);
+      await api.delete('/api/admin/helplines/' + confirmTarget);
       fetchHelplines();
       fetchSummary();
     } catch (e) {
-      console.warn(e);
+      console.warn('delete helpline failed', e);
+      // error will be shown by global notifier via api interceptor
+    } finally {
+      setConfirmTarget(null);
     }
-  }
+  };
   async function searchUsers() {
     try {
       const res = await api.get('/api/admin/search/users?q=' + encodeURIComponent(q));
@@ -593,13 +613,16 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
 
   // Open or download agreement PDF/URL. Keep simple: open the URL using Linking.
   const openOrDownloadAgreement = async (url?: string) => {
-    if (!url) return alert('No agreement URL available');
+    if (!url) {
+      notify({ type: 'warning', message: 'No agreement URL available' });
+      return;
+    }
     try {
       // Prefer to open the URL in external browser / handler which will allow download
       await Linking.openURL(url);
     } catch (e) {
       console.warn('open agreement failed', e);
-      alert('Failed to open agreement');
+      notify({ type: 'error', message: 'Failed to open agreement' });
     }
   };
 
@@ -641,7 +664,10 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
   }
   async function createWing() {
     try {
-      if (!newWing.name) return alert('Wing name required');
+      if (!newWing.name) {
+        notify({ type: 'warning', message: 'Wing name required' });
+        return;
+      }
       const r = await api.post('/api/admin/addWing', {
         name: newWing.name,
         number_of_floors: Number(newWing.number_of_floors),
@@ -652,16 +678,17 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
       fetchBuildings();
       fetchFlats();
       fetchSummary();
-      alert('Wing created with ' + (r.data?.flats?.length || 0) + ' flats');
     } catch (e) {
       console.warn('create wing failed', e);
-      alert('Create wing failed');
     }
   }
 
   async function createNotice() {
     try {
-      if (!newNotice.title) return alert('Title required');
+      if (!newNotice.title) {
+        notify({ type: 'warning', message: 'Title required' });
+        return;
+      }
       const payload: any = {
         title: newNotice.title,
         description: newNotice.description,
@@ -683,10 +710,8 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
       });
       fetchNoticesCount();
       fetchNotices();
-      alert('Notice created');
     } catch (e) {
       console.warn('create notice failed', e);
-      alert('Failed to create notice');
     }
   }
 
@@ -724,30 +749,37 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
       };
       const r = await api.post('/api/admin/assignUserToFlat', payload);
       if (r.data && r.data.success) {
-        alert('Assigned successfully');
         setShowAssignModal(false);
         fetchFlats();
         fetchUsers();
-      } else alert('Assign failed');
+      } else {
+        notify({ type: 'error', message: (r.data && r.data.error) || 'Assign failed' });
+      }
     } catch (e: any) {
       console.warn('assign failed', e);
-      alert((e && e.response?.data?.error) || 'Assign failed');
+      notify({ type: 'error', message: (e && e.response?.data?.error) || 'Assign failed' });
     }
   }
   const [assignFlats, setAssignFlats] = useState<any[]>([]);
   async function goToStep2() {
-    if (!assignState.wingId) return alert('Choose wing');
+    if (!assignState.wingId) {
+      notify({ type: 'warning', message: 'Choose wing' });
+      return;
+    }
     try {
       const flats = await loadFlatsForWing(assignState.wingId);
       setAssignFlats(flats);
       setAssignStep(2);
     } catch (e) {
-      alert('Failed to load flats');
+      console.warn('load flats failed', e);
     }
   }
   async function createFlat() {
     try {
-      if (!newFlat.flat_no) return alert('flat no required');
+      if (!newFlat.flat_no) {
+        notify({ type: 'warning', message: 'Flat no required' });
+        return;
+      }
       await api.post('/api/admin/flats', {
         flat_no: newFlat.flat_no,
         buildingId: newFlat.buildingId || undefined,
@@ -758,7 +790,6 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
       fetchSummary();
     } catch (e) {
       console.warn(e);
-      alert('Failed to create flat');
     }
   }
   async function editBuilding(id: string, patch: any) {
@@ -783,10 +814,12 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
     const h = helplines.find((x) => x.id === id);
     if (!h) return;
     setNewHelpline({
+      id: h.id,
       type: h.type,
       name: h.name || '',
       phone: h.phone || '',
       notes: h.notes || '',
+      thumbnail: h.thumbnail || h.image || null,
     });
     setShowHelplineModal(true);
   }
@@ -942,7 +975,10 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
               <View style={styles.sidebarQuick}>
                 <TouchableOpacity
                   style={styles.quickBtn}
-                  onPress={() => setShowHelplineModal(true)}
+                  onPress={() => {
+                    setNewHelpline({ type: 'ambulance', name: '', phone: '', notes: '' });
+                    setShowHelplineModal(true);
+                  }}
                 >
                   <Ionicons name="add" size={16} color="#fff" />
                   <Text style={styles.quickBtnText}>Add Helpline</Text>
@@ -951,11 +987,23 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                   <Ionicons name="person-add" size={16} color="#fff" />
                   <Text style={styles.quickBtnText}>Add Staff</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.quickBtn} onPress={() => setShowAddWingModal(true)}>
+                <TouchableOpacity
+                  style={styles.quickBtn}
+                  onPress={() => {
+                    setPopupForm('wing');
+                    setShowAddWingModal(true);
+                  }}
+                >
                   <Ionicons name="business" size={16} color="#fff" />
                   <Text style={styles.quickBtnText}>Add Wing</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.quickBtn} onPress={() => setShowAddFlatModal(true)}>
+                <TouchableOpacity
+                  style={styles.quickBtn}
+                  onPress={() => {
+                    setPopupForm('flat');
+                    setShowAddFlatModal(true);
+                  }}
+                >
                   <Ionicons name="home" size={16} color="#fff" />
                   <Text style={styles.quickBtnText}>Add Flat</Text>
                 </TouchableOpacity>
@@ -1177,34 +1225,21 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                   </View>
                 ) : null} */}
 
-                <View style={[styles.statsRow, isMobile && { paddingHorizontal: 6 }]}>
-                  {renderStatCard('Owners', summary?.totalOwners, 'person')}
-                  {renderStatCard('Tenants', summary?.totalTenants, 'people')}
-                  {renderStatCard('Wings', summary?.totalWings, 'business')}
-                  {renderStatCard('Services', summary?.totalHelplines, 'call')}
-                </View>
+                {/* Stat cards removed (Owners / Tenants / Wings / Services) per UI request */}
 
                 <View style={{ marginTop: 12, paddingHorizontal: isMobile ? 6 : 0 }}>
                   <Text style={styles.sectionTitle}>Quick actions</Text>
                   <View style={[styles.actionRow, isMobile && { flexDirection: 'column' }]}>
-                    <TouchableOpacity
-                      style={[
-                        styles.actionBtn,
-                        isMobile && { width: '100%', justifyContent: 'center', marginBottom: 8 },
-                      ]}
-                      onPress={() => setShowHelplineModal(true)}
-                    >
-                      <Ionicons name="add" size={16} />
-                      <Text style={styles.actionBtnText}>Add Helpline</Text>
-                    </TouchableOpacity>
-
                     {/* Add Wing quick action */}
                     <TouchableOpacity
                       style={[
                         styles.actionBtn,
                         isMobile && { width: '100%', justifyContent: 'center', marginBottom: 8 },
                       ]}
-                      onPress={() => setShowAddWingModal(true)}
+                      onPress={() => {
+                        setPopupForm('wing');
+                        setShowAddWingModal(true);
+                      }}
                     >
                       <Ionicons name="business" size={16} />
                       <Text style={styles.actionBtnText}>Add Wing</Text>
@@ -1252,17 +1287,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                       <Text style={styles.actionBtnText}>Complaints</Text>
                     </TouchableOpacity>
 
-                    {/* Cameras quick action */}
-                    <TouchableOpacity
-                      style={[
-                        styles.actionBtn,
-                        isMobile && { width: '100%', justifyContent: 'center', marginBottom: 8 },
-                      ]}
-                      onPress={() => setTab('cameras')}
-                    >
-                      <Ionicons name="videocam" size={16} />
-                      <Text style={styles.actionBtnText}>Cameras</Text>
-                    </TouchableOpacity>
+                    {/* Note: 'Add Helpline' and 'Cameras' quick actions removed as requested */}
                   </View>
                 </View>
               </ScrollView>
@@ -1271,33 +1296,85 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
             {tab === 'helplines' && (
               <View style={{ paddingVertical: 8 }}>
                 <View style={{ marginBottom: 8 }}>
-                  <Button title="Create Helpline" onPress={() => setShowHelplineModal(true)} />
+                  <Button
+                    title="Create Helpline"
+                    onPress={() => {
+                      setNewHelpline({ type: 'ambulance', name: '', phone: '', notes: '' });
+                      setShowHelplineModal(true);
+                    }}
+                  />
                 </View>
                 <FlatList
                   data={helplines}
                   keyExtractor={(h: any) => h.id}
                   renderItem={({ item }) => (
-                    <View style={styles.listItem}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.listTitle}>{item.name || item.type}</Text>
-                        <Text style={styles.listSub}>{item.phone}</Text>
+                    <View style={styles.helplineCard}>
+                      <View style={styles.helplineLeft}>
+                        <View style={styles.helplineIconWrap}>
+                          <Text style={{ color: '#fff', fontWeight: '700' }}>
+                            {(item.type || '?').toString().charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
                       </View>
-                      <View style={{ flexDirection: 'row' }}>
+
+                      <View style={styles.helplineBody}>
+                        <Text style={styles.helplineTitle} numberOfLines={1}>
+                          {item.name || item.type}
+                        </Text>
+                        <Text style={styles.helplinePhone}>{item.phone}</Text>
+                        {item.notes ? (
+                          <Text style={styles.helplineNotes} numberOfLines={2}>
+                            {item.notes}
+                          </Text>
+                        ) : null}
+                      </View>
+
+                      <View style={styles.helplineActions}>
+                        <TouchableOpacity
+                          style={styles.helplineActionBtn}
+                          onPress={() => {
+                            if (!item.phone) {
+                              notify({ type: 'warning', message: 'No phone number' });
+                              return;
+                            }
+                            const tel = `tel:${item.phone}`;
+                            Linking.openURL(tel).catch(() =>
+                              notify({ type: 'error', message: 'Failed to open dialer' })
+                            );
+                          }}
+                        >
+                          <Ionicons name="call-outline" size={18} color="#10b981" />
+                        </TouchableOpacity>
+
                         <TouchableOpacity
                           onPress={() => editHelpline(item.id)}
-                          style={styles.listIcon}
+                          style={styles.helplineActionBtn}
                         >
                           <Ionicons name="create-outline" size={18} />
                         </TouchableOpacity>
+
                         <TouchableOpacity
                           onPress={() => deleteHelpline(item.id)}
-                          style={styles.listIcon}
+                          style={styles.helplineActionBtn}
                         >
-                          <Ionicons name="trash-outline" size={18} color="#ff6b6b" />
+                          <Ionicons name="trash-outline" size={18} color="#ef4444" />
                         </TouchableOpacity>
                       </View>
                     </View>
                   )}
+                />
+                <ConfirmBox
+                  visible={confirmVisible}
+                  title={confirmTitle}
+                  message={confirmMessage}
+                  danger={confirmDanger}
+                  onCancel={() => {
+                    setConfirmVisible(false);
+                    setConfirmTarget(null);
+                  }}
+                  onConfirm={runDeleteConfirmed}
+                  confirmLabel="Delete"
+                  cancelLabel="Cancel"
                 />
               </View>
             )}
@@ -1607,7 +1684,10 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                                   const v = Number(
                                     (maintenanceEditAmount || '').replace(/[^0-9.-]/g, '')
                                   );
-                                  if (Number.isNaN(v)) return alert('Enter a valid amount');
+                                  if (Number.isNaN(v)) {
+                                    notify({ type: 'warning', message: 'Enter a valid amount' });
+                                    return;
+                                  }
                                   saveMaintenanceSetting(v);
                                 }}
                               >
@@ -1759,6 +1839,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                 <TouchableOpacity
                   style={styles.quickBtn}
                   onPress={() => {
+                    setNewHelpline({ type: 'ambulance', name: '', phone: '', notes: '' });
                     setShowHelplineModal(true);
                     setShowSidebar(false);
                   }}
@@ -1780,6 +1861,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                 <TouchableOpacity
                   style={styles.quickBtn}
                   onPress={() => {
+                    setPopupForm('wing');
                     setShowAddWingModal(true);
                     setShowSidebar(false);
                   }}
@@ -1790,6 +1872,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                 <TouchableOpacity
                   style={styles.quickBtn}
                   onPress={() => {
+                    setPopupForm('flat');
                     setShowAddFlatModal(true);
                     setShowSidebar(false);
                   }}
@@ -2018,177 +2101,232 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
         </View>
       </Modal>
 
-      {/* Add Wing modal */}
-      <Modal visible={showAddWingModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add Wing (Generate Flats)</Text>
-            <Text style={styles.label}>Wing Name</Text>
-            <TextInput
-              value={newWing.name}
-              onChangeText={(t) => setNewWing((s) => ({ ...s, name: t }))}
-              style={styles.input}
-            />
-            <Text style={styles.label}>Number of Floors</Text>
-            <TextInput
-              value={newWing.number_of_floors}
-              onChangeText={(t) => setNewWing((s) => ({ ...s, number_of_floors: t }))}
-              style={styles.input}
-              keyboardType="numeric"
-            />
-            <Text style={styles.label}>Flats per Floor</Text>
-            <TextInput
-              value={newWing.flats_per_floor}
-              onChangeText={(t) => setNewWing((s) => ({ ...s, flats_per_floor: t }))}
-              style={styles.input}
-              keyboardType="numeric"
-            />
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
-              <Button title="Cancel" onPress={() => setShowAddWingModal(false)} />
-              <View style={{ width: 8 }} />
-              <Button title="Create Wing" onPress={createWing} />
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Add Wing popup (uses PopupBox) */}
+      <PopupBox
+        visible={showAddWingModal}
+        onClose={() => setShowAddWingModal(false)}
+        title="Add Wing (Generate Flats)"
+        primaryLabel="Create Wing"
+        onPrimary={createWing}
+      >
+        <Text style={styles.label}>Wing Name</Text>
+        <TextInput
+          value={newWing.name}
+          onChangeText={(t) => setNewWing((s) => ({ ...s, name: t }))}
+          style={styles.input}
+        />
+        <Text style={styles.label}>Number of Floors</Text>
+        <TextInput
+          value={newWing.number_of_floors}
+          onChangeText={(t) => setNewWing((s) => ({ ...s, number_of_floors: t }))}
+          style={styles.input}
+          keyboardType="numeric"
+        />
+        <Text style={styles.label}>Flats per Floor</Text>
+        <TextInput
+          value={newWing.flats_per_floor}
+          onChangeText={(t) => setNewWing((s) => ({ ...s, flats_per_floor: t }))}
+          style={styles.input}
+          keyboardType="numeric"
+        />
+      </PopupBox>
       {/* Profile page is now a full screen tab rendered when tab === 'profile' */}
 
-      {/* Assign Owner/Tenant multi-step modal */}
-      <Modal visible={showAssignModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContent, { maxHeight: '85%' }]}>
-            <Text style={styles.modalTitle}>Assign Owner / Tenant</Text>
-            {assignStep === 1 && (
-              <>
-                <Text style={styles.label}>Select Wing</Text>
-                <FlatList
-                  data={uniqueBuildings}
-                  horizontal
-                  keyExtractor={(b: any, idx: number) => `${b.id || idx}-${idx}`}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      onPress={() => setAssignState((s) => ({ ...s, wingId: item.id }))}
-                      style={[
-                        styles.buildingChip,
-                        assignState.wingId === item.id && styles.buildingChipActive,
-                      ]}
-                    >
-                      <Text>{item.name}</Text>
-                    </TouchableOpacity>
-                  )}
-                />
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-                  <Button title="Next" onPress={goToStep2} />
-                </View>
-              </>
-            )}
-            {assignStep === 2 && (
-              <>
-                <Text style={styles.label}>Select Flat</Text>
-                <FlatList
-                  data={assignFlats}
-                  keyExtractor={(f: any) => f.id}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      onPress={() => setAssignState((s) => ({ ...s, flatId: item.id }))}
-                      style={[
-                        styles.buildingChip,
-                        assignState.flatId === item.id && styles.buildingChipActive,
-                      ]}
-                    >
-                      <Text>{item.flat_no}</Text>
-                    </TouchableOpacity>
-                  )}
-                  horizontal
-                />
-                <View
-                  style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}
-                >
-                  <Button title="Back" onPress={() => setAssignStep(1)} />
-                  <Button
-                    title="Next"
-                    onPress={() => {
-                      if (!assignState.flatId) return alert('Choose flat');
-                      setAssignStep(3);
-                    }}
-                  />
-                </View>
-              </>
-            )}
-            {assignStep === 3 && (
-              <>
-                <Text style={styles.label}>Role</Text>
-                <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-                  <TouchableOpacity
-                    onPress={() => setAssignState((s) => ({ ...s, role: 'owner' }))}
-                    style={[styles.pill, assignState.role === 'owner' && styles.pillActive]}
-                  >
-                    <Text>Owner</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => setAssignState((s) => ({ ...s, role: 'tenant' }))}
-                    style={[styles.pill, assignState.role === 'tenant' && styles.pillActive]}
-                  >
-                    <Text>Tenant</Text>
-                  </TouchableOpacity>
-                </View>
-                <View
-                  style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}
-                >
-                  <Button title="Back" onPress={() => setAssignStep(2)} />
-                  <Button title="Next" onPress={() => setAssignStep(4)} />
-                </View>
-              </>
-            )}
-            {assignStep === 4 && (
-              <>
-                <Text style={styles.label}>Name</Text>
-                <TextInput
-                  value={assignState.name}
-                  onChangeText={(t) => setAssignState((s) => ({ ...s, name: t }))}
-                  style={styles.input}
-                />
-                <Text style={styles.label}>Phone</Text>
-                <TextInput
-                  value={assignState.phone}
-                  onChangeText={(t) => setAssignState((s) => ({ ...s, phone: t }))}
-                  style={styles.input}
-                  keyboardType="phone-pad"
-                />
-                <Text style={styles.label}>Address</Text>
-                <TextInput
-                  value={assignState.address}
-                  onChangeText={(t) => setAssignState((s) => ({ ...s, address: t }))}
-                  style={styles.input}
-                />
-                {/* Document upload area for tenants: simple URL input or picker */}
-                {assignState.role === 'tenant' && (
-                  <>
-                    <Text style={[styles.sectionTitle, { marginTop: 8 }]}>
-                      Upload Documents (Aadhaar, PAN, Agreement)
-                    </Text>
-                    <TextInput
-                      placeholder="Document URL"
-                      onChangeText={(t) =>
-                        setAssignState((s) => ({ ...s, files: [...s.files, { file_url: t }] }))
-                      }
-                      style={styles.input}
-                    />
-                  </>
-                )}
-                <View
-                  style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}
-                >
-                  <Button title="Back" onPress={() => setAssignStep(3)} />
-                  <Button title="Submit" onPress={submitAssign} />
-                </View>
-              </>
-            )}
-            <View style={{ height: 12 }} />
-            <Button title="Close" onPress={() => setShowAssignModal(false)} />
+      {/* Assign Owner/Tenant popup - redesigned stepper using PopupBox */}
+      <PopupBox
+        visible={showAssignModal}
+        onClose={() => setShowAssignModal(false)}
+        title="Assign Owner / Tenant"
+        subtitle={`Step ${assignStep} of 4`}
+        showFooter={true}
+        footerContent={
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+            <TouchableOpacity
+              style={[
+                styles.smallBtn,
+                { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb' },
+              ]}
+              onPress={() => {
+                if (assignStep === 1) return setShowAssignModal(false);
+                setAssignStep((s) => Math.max(1, s - 1));
+              }}
+            >
+              <Text style={{ color: assignStep === 1 ? '#374151' : '#374151' }}>
+                {assignStep === 1 ? 'Close' : 'Back'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={async () => {
+                try {
+                  if (assignStep === 1) {
+                    // goToStep2 loads flats for the selected wing
+                    await goToStep2();
+                    return;
+                  }
+                  if (assignStep === 2) {
+                    if (!assignState.flatId) {
+                      notify({ type: 'warning', message: 'Choose flat' });
+                      return;
+                    }
+                    setAssignStep(3);
+                    return;
+                  }
+                  if (assignStep === 3) {
+                    setAssignStep(4);
+                    return;
+                  }
+                  // step 4 => submit
+                  if (assignStep === 4) {
+                    await submitAssign();
+                    return;
+                  }
+                } catch (e) {
+                  console.warn('assign step action failed', e);
+                }
+              }}
+            >
+              <Text style={styles.primaryText}>{assignStep === 4 ? 'Submit' : 'Next'}</Text>
+            </TouchableOpacity>
           </View>
+        }
+      >
+        {/* Stepper indicator */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }}>
+          {[
+            { key: 1, label: 'Wing' },
+            { key: 2, label: 'Flat' },
+            { key: 3, label: 'Role' },
+            { key: 4, label: 'Details' },
+          ].map((s) => (
+            <View key={s.key} style={{ alignItems: 'center', flex: 1 }}>
+              <View
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  backgroundColor: assignStep >= s.key ? '#4f46e5' : '#eef2ff',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text
+                  style={{ color: assignStep >= s.key ? '#fff' : '#4f46e5', fontWeight: '700' }}
+                >
+                  {s.key}
+                </Text>
+              </View>
+              <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>{s.label}</Text>
+            </View>
+          ))}
         </View>
-      </Modal>
+
+        {/* Step content */}
+        {assignStep === 1 && (
+          <>
+            <Text style={styles.label}>Select Wing</Text>
+            <FlatList
+              data={uniqueBuildings}
+              horizontal
+              keyExtractor={(b: any, idx: number) => `${b.id || idx}-${idx}`}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  onPress={() => setAssignState((s) => ({ ...s, wingId: item.id }))}
+                  style={[
+                    styles.buildingChip,
+                    assignState.wingId === item.id && styles.buildingChipActive,
+                    { paddingHorizontal: 14, paddingVertical: 10, marginRight: 10 },
+                  ]}
+                >
+                  <Text style={{ fontWeight: '700' }}>{item.name}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          </>
+        )}
+
+        {assignStep === 2 && (
+          <>
+            <Text style={styles.label}>Select Flat</Text>
+            <FlatList
+              data={assignFlats}
+              keyExtractor={(f: any) => f.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  onPress={() => setAssignState((s) => ({ ...s, flatId: item.id }))}
+                  style={[
+                    styles.buildingChip,
+                    assignState.flatId === item.id && styles.buildingChipActive,
+                    { paddingHorizontal: 12, paddingVertical: 10, marginRight: 10 },
+                  ]}
+                >
+                  <Text style={{ fontWeight: '700' }}>{item.flat_no}</Text>
+                </TouchableOpacity>
+              )}
+              horizontal
+            />
+          </>
+        )}
+
+        {assignStep === 3 && (
+          <>
+            <Text style={styles.label}>Role</Text>
+            <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+              <TouchableOpacity
+                onPress={() => setAssignState((s) => ({ ...s, role: 'owner' }))}
+                style={[styles.pill, assignState.role === 'owner' && styles.pillActive]}
+              >
+                <Text>Owner</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setAssignState((s) => ({ ...s, role: 'tenant' }))}
+                style={[styles.pill, assignState.role === 'tenant' && styles.pillActive]}
+              >
+                <Text>Tenant</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+
+        {assignStep === 4 && (
+          <>
+            <Text style={styles.label}>Name</Text>
+            <TextInput
+              value={assignState.name}
+              onChangeText={(t) => setAssignState((s) => ({ ...s, name: t }))}
+              style={styles.input}
+            />
+            <Text style={styles.label}>Phone</Text>
+            <TextInput
+              value={assignState.phone}
+              onChangeText={(t) => setAssignState((s) => ({ ...s, phone: t }))}
+              style={styles.input}
+              keyboardType="phone-pad"
+            />
+            <Text style={styles.label}>Address</Text>
+            <TextInput
+              value={assignState.address}
+              onChangeText={(t) => setAssignState((s) => ({ ...s, address: t }))}
+              style={styles.input}
+            />
+            {assignState.role === 'tenant' && (
+              <>
+                <Text style={[styles.sectionTitle, { marginTop: 8 }]}>
+                  Upload Documents (Aadhaar, PAN, Agreement)
+                </Text>
+                <TextInput
+                  placeholder="Document URL"
+                  onChangeText={(t) =>
+                    setAssignState((s) => ({ ...s, files: [...s.files, { file_url: t }] }))
+                  }
+                  style={styles.input}
+                />
+              </>
+            )}
+          </>
+        )}
+      </PopupBox>
 
       {/* Header three-dot menu modal */}
       <Modal visible={showHeaderMenu} animationType="fade" transparent>
@@ -2203,6 +2341,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
             <TouchableOpacity
               style={{ padding: 12 }}
               onPress={() => {
+                setPopupForm('wing');
                 setShowHeaderMenu(false);
                 setShowAddWingModal(true);
               }}
@@ -2212,6 +2351,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
             <TouchableOpacity
               style={{ padding: 12 }}
               onPress={() => {
+                setPopupForm('flat');
                 setShowHeaderMenu(false);
                 setShowAddFlatModal(true);
               }}
@@ -2420,7 +2560,13 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                       if (!detailUser?.user?.id) missing.push('ownerId');
                       if (!agrTenantId) missing.push('tenantId');
                       if (!agrUrl) missing.push('file_url');
-                      if (missing.length) return alert('Please provide: ' + missing.join(', '));
+                      if (missing.length) {
+                        notify({
+                          type: 'warning',
+                          message: 'Please provide: ' + missing.join(', '),
+                        });
+                        return;
+                      }
 
                       const r = await api.post('/api/admin/agreements', {
                         flatId: agrFlatId,
@@ -2438,7 +2584,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                       fetchLogs();
                     } catch (e) {
                       console.warn(e);
-                      alert('Save failed');
+                      notify({ type: 'error', message: 'Save failed' });
                     }
                   }}
                 />
@@ -2544,10 +2690,10 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                             // refresh list
                             fetchMaintenanceFees(maintenanceMonth || undefined, 'all');
                             setProofOverview(null);
-                            Alert.alert('Bill marked as paid');
+                            notify({ type: 'success', message: 'Bill marked as paid' });
                           } catch (e) {
                             console.warn('admin mark paid failed', e);
-                            Alert.alert('Failed to mark as paid');
+                            notify({ type: 'error', message: 'Failed to mark as paid' });
                           }
                         }}
                       >
@@ -2562,83 +2708,79 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
         </View>
       </Modal>
 
-      {/* Add Flat modal */}
-      <Modal visible={showAddFlatModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add Flat</Text>
-            <Text style={styles.label}>Wing</Text>
-            <FlatList
-              data={uniqueBuildings}
-              horizontal
-              keyExtractor={(b: any, idx: number) => `${b.id || idx}-${idx}`}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  onPress={() => setNewFlat((s) => ({ ...s, buildingId: item.id }))}
-                  style={[
-                    styles.buildingChip,
-                    newFlat.buildingId === item.id && styles.buildingChipActive,
-                  ]}
-                >
-                  <Text>{item.name}</Text>
-                </TouchableOpacity>
-              )}
-            />
+      {/* Add Flat popup (uses PopupBox) */}
+      <PopupBox
+        visible={showAddFlatModal}
+        onClose={() => setShowAddFlatModal(false)}
+        title="Add Flat"
+        primaryLabel="Create"
+        onPrimary={createFlat}
+      >
+        <Text style={styles.label}>Wing</Text>
+        <FlatList
+          data={uniqueBuildings}
+          horizontal
+          keyExtractor={(b: any, idx: number) => `${b.id || idx}-${idx}`}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              onPress={() => setNewFlat((s) => ({ ...s, buildingId: item.id }))}
+              style={[
+                styles.buildingChip,
+                newFlat.buildingId === item.id && styles.buildingChipActive,
+              ]}
+            >
+              <Text>{item.name}</Text>
+            </TouchableOpacity>
+          )}
+        />
 
-            <Text style={styles.label}>Flat / Apartment No.</Text>
-            <TextInput
-              value={newFlat.flat_no}
-              onChangeText={(t) => setNewFlat((s) => ({ ...s, flat_no: t }))}
-              style={styles.input}
-            />
+        <Text style={styles.label}>Flat / Apartment No.</Text>
+        <TextInput
+          value={newFlat.flat_no}
+          onChangeText={(t) => setNewFlat((s) => ({ ...s, flat_no: t }))}
+          style={styles.input}
+        />
+      </PopupBox>
 
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
-              <Button title="Cancel" onPress={() => setShowAddFlatModal(false)} />
-              <View style={{ width: 8 }} />
-              <Button title="Create" onPress={createFlat} />
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Helpline add / edit popup (uses PopupBox) */}
+      <PopupBox
+        visible={showHelplineModal}
+        onClose={() => setShowHelplineModal(false)}
+        title={newHelpline && newHelpline.id ? 'Edit Helpline' : 'Create Helpline'}
+        subtitle={newHelpline && newHelpline.id ? 'Update helpline details' : undefined}
+        primaryLabel={newHelpline && newHelpline.id ? 'Update' : 'Create'}
+        onPrimary={createHelpline}
+      >
+        <Text style={styles.label}>Type (ambulance, police, plumber...)</Text>
+        <TextInput
+          value={newHelpline.type}
+          onChangeText={(t) => setNewHelpline((s: any) => ({ ...s, type: t }))}
+          style={styles.input}
+        />
 
-      {/* Helpline modal */}
-      <Modal visible={showHelplineModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add Helpline</Text>
-            <Text style={styles.label}>Type (ambulance, police, plumber...)</Text>
-            <TextInput
-              value={newHelpline.type}
-              onChangeText={(t) => setNewHelpline((s) => ({ ...s, type: t }))}
-              style={styles.input}
-            />
-            <Text style={styles.label}>Name (optional)</Text>
-            <TextInput
-              value={newHelpline.name}
-              onChangeText={(t) => setNewHelpline((s) => ({ ...s, name: t }))}
-              style={styles.input}
-            />
-            <Text style={styles.label}>Phone</Text>
-            <TextInput
-              value={newHelpline.phone}
-              onChangeText={(t) => setNewHelpline((s) => ({ ...s, phone: t }))}
-              style={styles.input}
-              keyboardType="phone-pad"
-            />
-            <Text style={styles.label}>Notes</Text>
-            <TextInput
-              value={newHelpline.notes}
-              onChangeText={(t) => setNewHelpline((s) => ({ ...s, notes: t }))}
-              style={styles.input}
-            />
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-              <Button title="Cancel" onPress={() => setShowHelplineModal(false)} />
-              <View style={{ width: 8 }} />
-              <Button title="Create" onPress={createHelpline} />
-            </View>
-          </View>
-        </View>
-      </Modal>
+        <Text style={styles.label}>Name (optional)</Text>
+        <TextInput
+          value={newHelpline.name}
+          onChangeText={(t) => setNewHelpline((s: any) => ({ ...s, name: t }))}
+          style={styles.input}
+        />
+
+        <Text style={styles.label}>Phone</Text>
+        <TextInput
+          value={newHelpline.phone}
+          onChangeText={(t) => setNewHelpline((s: any) => ({ ...s, phone: t }))}
+          style={styles.input}
+          keyboardType="phone-pad"
+        />
+
+        <Text style={styles.label}>Notes</Text>
+        <TextInput
+          value={newHelpline.notes}
+          onChangeText={(t) => setNewHelpline((s: any) => ({ ...s, notes: t }))}
+          style={[styles.input, { height: 80 }]}
+          multiline
+        />
+      </PopupBox>
     </SafeAreaView>
   );
 }
@@ -2942,6 +3084,32 @@ const styles: any = StyleSheet.create({
   listSub: { color: '#6b7280' },
   listMeta: { color: '#6b7280', marginTop: 4, fontSize: 13 },
   listIcon: { padding: 6, marginLeft: 6 },
+
+  // helplines
+  helplineCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 8,
+    elevation: 1,
+  },
+  helplineLeft: { marginRight: 12 },
+  helplineIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#4f46e5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helplineBody: { flex: 1 },
+  helplineTitle: { fontWeight: '700', color: '#111' },
+  helplinePhone: { color: '#6b7280', marginTop: 4 },
+  helplineNotes: { color: '#6b7280', marginTop: 6, fontSize: 13 },
+  helplineActions: { flexDirection: 'row', marginLeft: 8 },
+  helplineActionBtn: { padding: 8, marginLeft: 6 },
 
   rowBetween: { flexDirection: 'row', alignItems: 'center' },
   search: {

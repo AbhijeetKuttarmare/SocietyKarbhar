@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Animated, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Animated } from 'react-native';
+import { notify } from '../../services/notifier';
 import styles from '../../styles/superadminStyles';
 import api from '../../services/api';
 
@@ -107,7 +108,9 @@ export default function DashboardScreen({ user }: Props) {
                     </Text>
                     <TouchableOpacity
                       activeOpacity={0.85}
-                      onPress={() => Alert.alert(b.key, String(b.value))}
+                      onPress={() =>
+                        notify({ type: 'info', title: b.key, message: String(b.value) })
+                      }
                       style={{
                         width: 44,
                         height: 120,

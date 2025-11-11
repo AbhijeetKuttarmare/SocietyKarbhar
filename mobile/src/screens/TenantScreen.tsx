@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import api from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { notify } from '../services/notifier';
 import { BottomTabContext } from '../contexts/BottomTabContext';
 import ProfileCard from '../components/ProfileCard';
 import OwnerScreen from './OwnerScreen';
@@ -158,7 +159,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
       setComplaintForm({ title: '', description: '', image: '' });
     } catch (e) {
       console.warn('submit complaint failed', e);
-      alert('Failed to submit');
+      // Errors are shown by global notifier; avoid inline alerts
     }
   }
 
@@ -167,9 +168,9 @@ export default function TenantScreen({ user, onLogout }: Props) {
       const payload: any = { message: supportForm.message };
       try {
         await api.post('/api/support', payload);
-        alert('Support request sent');
+        // success handled by global notifier
       } catch (e) {
-        alert('Support request queued (no server endpoint)');
+        console.warn('support request queued/fallback', e);
       }
       setShowSupportModal(false);
       setSupportForm({ message: '', image: '' });
@@ -270,10 +271,10 @@ export default function TenantScreen({ user, onLogout }: Props) {
           console.warn('failed to persist user in AsyncStorage', e);
         }
       }
-      alert('Profile saved');
+      // success handled by global notifier
     } catch (e) {
       console.warn('saveProfile failed', e);
-      alert('Save failed');
+      // error handled by global notifier
     }
   }
 
@@ -690,10 +691,10 @@ export default function TenantScreen({ user, onLogout }: Props) {
                               /* ignore */
                             }
                           }
-                          alert('Profile photo updated');
+                          // success handled by global notifier
                         } catch (e) {
                           console.warn('upload profile failed', e);
-                          alert('Upload failed');
+                          // error handled by global notifier
                         }
                       }}
                       onCall={(p) => {
@@ -812,7 +813,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
                                     );
                                   } catch (e) {
                                     console.warn('upload failed', e);
-                                    alert('Upload failed');
+                                    // error handled by global notifier
                                   } finally {
                                     setUploadingDocId(null);
                                   }
@@ -893,7 +894,11 @@ export default function TenantScreen({ user, onLogout }: Props) {
                       <View key={d.id} style={styles.listItem}>
                         <Text style={styles.listTitle}>{d.title}</Text>
                         <TouchableOpacity
-                          onPress={() => alert('Open: ' + (d.file_url || 'placeholder'))}
+                          onPress={() => {
+                            // Open file - no alert
+                            setPreviewImageUrl(d.file_url || d.uri || null);
+                            setShowPreviewModal(true);
+                          }}
                         >
                           <Text style={styles.link}>View</Text>
                         </TouchableOpacity>
@@ -1212,7 +1217,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
                                   if (url) setProofUri(url);
                                 } catch (e) {
                                   console.warn('pick proof failed (profile picker)', e);
-                                  alert('Upload failed');
+                                  // error handled by global notifier
                                 } finally {
                                   setUploadingProof(false);
                                 }
@@ -1240,7 +1245,8 @@ export default function TenantScreen({ user, onLogout }: Props) {
                               if (url) setProofUri(url);
                             } catch (e) {
                               console.warn('pick proof failed (profile picker)', e);
-                              alert('Upload failed');
+                              // error handled via notifier
+                              notify({ type: 'error', message: 'Upload failed' });
                             } finally {
                               setUploadingProof(false);
                             }
@@ -1256,7 +1262,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
                         try {
                           if (!selectedBill) return;
                           if (!proofUri) {
-                            alert('Please attach a proof image');
+                            notify({ type: 'warning', message: 'Please attach a proof image' });
                             return;
                           }
                           // if proofUri is a data: URL (unexpected), upload it first
@@ -1279,10 +1285,10 @@ export default function TenantScreen({ user, onLogout }: Props) {
                           setShowMarkPaidModal(false);
                           setSelectedBill(null);
                           setProofUri(null);
-                          alert('Marked as paid — owner will verify.');
+                          // success handled by global notifier
                         } catch (e) {
                           console.warn('mark paid failed', e);
-                          alert('Failed to submit proof');
+                          // error handled by global notifier
                         }
                       }}
                     />
