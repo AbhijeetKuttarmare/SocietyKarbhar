@@ -35,6 +35,9 @@ import pickAndUploadProfile, {
   pickAndUploadFile as sharedPickAndUploadFile,
 } from '../services/uploadProfile';
 import AdminProfile from './AdminProfile';
+import AboutUs from './AboutUs';
+import PrivacyPolicy from './PrivacyPolicy';
+import TermsAndConditions from './TermsAndConditions';
 import StaffManagement from './StaffManagement';
 import VisitorsScreen from './Admin/Visitors';
 import CamerasScreen from './Admin/Cameras';
@@ -90,6 +93,9 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
     | 'staff'
     | 'visitors'
     | 'cameras'
+    | 'about'
+    | 'privacy'
+    | 'terms'
   >('dashboard');
   const [tab2, setTab2] = useState<'wings' | 'logs'>('wings');
   const [q, setQ] = useState('');
@@ -136,6 +142,8 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
     (user as any)?.avatar || (user as any)?.image
   );
+  // Which info screen to show as a modal ('AboutUs'|'PrivacyPolicy'|'TermsAndConditions'|null)
+  const [infoScreen, setInfoScreen] = useState<string | null>(null);
   const [showUserDetail, setShowUserDetail] = useState(false);
   const [detailUser, setDetailUser] = useState<any>(null);
   const [buildings, setBuildings] = useState<any[]>([]);
@@ -861,7 +869,11 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
       else if (k === 'bills' || k === 'maintenance') setTab('maintenance');
       else if (k === 'users') setTab('users');
       else if (k === 'notices') setTab('notices');
-      else if (k === 'profile') setTab('profile');
+      else if (k === 'profile')
+        // don't override if an info page is showing; preserve about/privacy/terms
+        setTab((prev) =>
+          prev === 'about' || prev === 'privacy' || prev === 'terms' ? prev : 'profile'
+        );
       else if (k === 'cameras') setTab('cameras');
     } catch (e) {}
   }, [bottomTab.activeKey]);
@@ -878,8 +890,10 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
         profile: 'profile',
         cameras: 'cameras',
       };
-      const k = map[tab] || 'home';
-      if (bottomTab.activeKey !== k) bottomTab.setActiveKey(k);
+      // Only map known tabs to bottom tab keys. If current `tab` is a full-page info
+      // screen (about/privacy/terms), do not change the bottom tab selection.
+      const k = map[tab];
+      if (k && bottomTab.activeKey !== k) bottomTab.setActiveKey(k);
     } catch (e) {}
   }, [tab]);
 
@@ -1618,7 +1632,35 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
                   userAvatar={userAvatar}
                   setUserAvatar={setUserAvatar}
                   setUser={setUser}
+                  // navigation: open a full page tab for About / Privacy / Terms
+                  navigation={{
+                    navigate: (route: string) => {
+                      try {
+                        if (route === 'AboutUs') setTab('about');
+                        else if (route === 'PrivacyPolicy') setTab('privacy');
+                        else if (route === 'TermsAndConditions') setTab('terms');
+                        else setInfoScreen(route || null);
+                      } catch (e) {}
+                    },
+                  }}
                 />
+              </View>
+            )}
+
+            {/* Full page render for info screens (About / Privacy / Terms) */}
+            {tab === 'about' && (
+              <View style={{ paddingVertical: 8 }}>
+                <AboutUs onClose={() => setTab('profile')} />
+              </View>
+            )}
+            {tab === 'privacy' && (
+              <View style={{ paddingVertical: 8 }}>
+                <PrivacyPolicy onClose={() => setTab('profile')} />
+              </View>
+            )}
+            {tab === 'terms' && (
+              <View style={{ paddingVertical: 8 }}>
+                <TermsAndConditions onClose={() => setTab('profile')} />
               </View>
             )}
 
@@ -1917,6 +1959,31 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
             </View>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Info screens modal (About / Privacy / Terms) opened from AdminProfile via navigation.navigate */}
+      <Modal visible={!!infoScreen} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContentLarge, { maxHeight: '85%' }]}>
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <Text style={styles.modalTitle}>{infoScreen || ''}</Text>
+              <TouchableOpacity onPress={() => setInfoScreen(null)}>
+                <Ionicons name="close" size={22} />
+              </TouchableOpacity>
+            </View>
+            <View style={{ marginTop: 8, flex: 1 }}>
+              {infoScreen === 'AboutUs' && <AboutUs />}
+              {infoScreen === 'PrivacyPolicy' && <PrivacyPolicy />}
+              {infoScreen === 'TermsAndConditions' && <TermsAndConditions />}
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {/* Image preview is rendered inside the User Detail modal so it appears above the form. */}

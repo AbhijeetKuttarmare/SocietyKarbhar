@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useContext } from 'react';
 import {
   View,
   Text,
@@ -13,17 +13,25 @@ import {
   Image,
   Platform,
   useWindowDimensions,
+  Linking,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+
+import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import api, { testConnectivity } from '../services/api';
 import { defaultBaseUrl } from '../services/config';
-import ProfileCard from '../components/ProfileCard';
 import { notify } from '../services/notifier';
-import { Linking } from 'react-native';
 import pickAndUploadProfile from '../services/uploadProfile';
 import DashboardScreen from './Superadmin/DashboardScreen';
-import { MaterialIcons, Feather } from '@expo/vector-icons';
+import PopupBox from '../components/PopupBox';
+import ProfileCard from '../components/ProfileCard';
 import { BottomTabContext } from '../contexts/BottomTabContext';
+import SuperadminProfile from './SuperadminProfile';
+import AboutUs from './AboutUs';
+import PrivacyPolicy from './PrivacyPolicy';
+import TermsAndConditions from './TermsAndConditions';
+import styles from '../styles/superadminStyles';
+import ConfirmBox from '../components/ConfirmBox';
 
 type Props = { user: any; onLogout: () => void };
 type Society = {
@@ -39,18 +47,30 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width < 700;
   const cardWidth = isMobile ? '100%' : 280;
-  // Fixed bottom tab height used to reserve space for content
+  // reserve space for bottom tab
   const TAB_HEIGHT = 72;
+
   const [societies, setSocieties] = useState<Society[]>([]);
-  const [activeTab, setActiveTab] = useState<
-    'Dashboard' | 'Societies' | 'Admins' | 'Buildings' | 'Plans' | 'Reports' | 'Logs' | 'Settings'
-  >('Dashboard');
-  const [loading, setLoading] = useState(false);
-  const [modalVisible, setModalVisible] = useState(false);
   const [admins, setAdmins] = useState<any[]>([]);
   const [buildings, setBuildings] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
-  const [form, setForm] = useState({
+  const [activeTab, setActiveTab] = useState<
+    | 'Dashboard'
+    | 'Societies'
+    | 'Admins'
+    | 'Buildings'
+    | 'Plans'
+    | 'Reports'
+    | 'Logs'
+    | 'Settings'
+    | 'Profile'
+  >('Dashboard');
+  const [itemsPerPage] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+
+  const [modalVisible, setModalVisible] = useState(false);
+  const [form, setForm] = useState<any>({
     name: '',
     country: '',
     city: '',
@@ -59,8 +79,10 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
     builder_name: '',
     image_url: '',
   });
-  const [creatingAdminFor, setCreatingAdminFor] = useState<null | Society>(null);
-  const [adminForm, setAdminForm] = useState({
+  const [editingSociety, setEditingSociety] = useState<any | null>(null);
+
+  const [creatingAdminFor, setCreatingAdminFor] = useState<any | null>(null);
+  const [adminForm, setAdminForm] = useState<any>({
     name: '',
     phone: '',
     email: '',
@@ -68,32 +90,37 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
     emergency_contact: '',
     avatar: '',
   });
-  const [editingAdmin, setEditingAdmin] = useState<any>(null);
+  const [editingAdmin, setEditingAdmin] = useState<any | null>(null);
   const [adminUploading, setAdminUploading] = useState(false);
-  const [editingSociety, setEditingSociety] = useState<null | Society>(null);
+
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmDanger, setConfirmDanger] = useState(false);
+
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
     (user as any)?.avatar || (user as any)?.image
   );
-  // confirm dialog state for destructive actions
-  const [confirmVisible, setConfirmVisible] = useState(false);
-  const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
-  const [confirmTitle, setConfirmTitle] = useState<string>('Are you sure?');
-  const [confirmMessage, setConfirmMessage] = useState<string>('');
-  const [confirmDanger, setConfirmDanger] = useState<boolean>(true);
 
-  // Debug: log render and active tab to help diagnose blank screen issues
-  useEffect(() => {
-    console.log('[SuperadminScreen] render - activeTab=', activeTab);
-  }, [activeTab]);
+  // fetch societies list
+  const fetchSocieties = async () => {
+    try {
+      const headers: any = {};
+      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
+      const res = await api.get('/api/superadmin/societies', { headers });
+      setSocieties(res.data.societies || res.data || []);
+    } catch (e) {
+      console.warn('fetchSocieties failed', e);
+    }
+  };
 
-  const bottomTab = React.useContext(BottomTabContext);
-
-  // Sync global bottom tab -> local activeTab
+  // sync bottom tab -> local tab on mount
+  const bottomTab = useContext(BottomTabContext);
   useEffect(() => {
     try {
       const k = bottomTab.activeKey;
-      // map global keys to superadmin local tabs
       if (k === 'home') setActiveTab('Dashboard');
       else if (k === 'societies' || k === 'browses') setActiveTab('Societies');
       else if (k === 'admins') setActiveTab('Admins');
@@ -102,61 +129,21 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
       else if (k === 'reports') setActiveTab('Reports');
       else if (k === 'logs') setActiveTab('Logs');
       else if (k === 'settings') setActiveTab('Settings');
-      else if (k === 'profile') {
-        // open profile modal when bottom 'profile' key is pressed
-        setShowProfileModal(true);
-      }
+      else if (k === 'profile') setActiveTab('Profile');
     } catch (e) {}
-  }, [bottomTab.activeKey]);
-
-  // Sync local activeTab -> global bottom tab
-  useEffect(() => {
-    try {
-      const map: any = {
-        Dashboard: 'home',
-        Societies: 'societies',
-        Admins: 'admins',
-        Buildings: 'buildings',
-        Plans: 'plans',
-        Reports: 'reports',
-        Logs: 'logs',
-        Settings: 'profile', // map Settings to profile tab so Settings highlights profile
-      };
-      const k = map[activeTab] || 'home';
-      if (bottomTab.activeKey !== k) bottomTab.setActiveKey(k);
-    } catch (e) {}
-  }, [activeTab]);
-
-  // UI state
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
-  // Pagination state
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 8;
+  }, [bottomTab?.activeKey]);
 
   useEffect(() => {
+    // initial data
     fetchSocieties();
+    fetchAdmins();
+    fetchBuildings();
+    fetchPlans();
   }, []);
-  useEffect(() => {
-    if (activeTab === 'Admins') fetchAdmins();
-    if (activeTab === 'Buildings') fetchBuildings();
-    if (activeTab === 'Plans') fetchPlans();
-  }, [activeTab]);
 
-  const fetchSocieties = async () => {
-    setLoading(true);
-    try {
-      const headers: any = {};
-      if ((user as any)?.token) headers.Authorization = `Bearer ${(user as any).token}`;
-      const res = await api.get('/api/superadmin/societies', { headers });
-      setSocieties(res.data.societies || []);
-    } catch (err: any) {
-      notify({ type: 'error', message: 'Could not load societies' });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [infoScreen, setInfoScreen] = useState<string | null>(null);
 
+  // basic pagination helpers
   const fetchAdmins = async () => {
     try {
       const headers: any = {};
@@ -662,12 +649,6 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                   <TouchableOpacity style={styles.refreshBtn} onPress={fetchSocieties}>
                     <Text style={styles.refreshBtnText}>⟳ Refresh</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.refreshBtn, { marginLeft: 8, backgroundColor: '#f3f4f6' }]}
-                    onPress={testBackendConnectivityAndUpload}
-                  >
-                    <Text style={[styles.refreshBtnText, { color: '#111' }]}>Test Backend</Text>
-                  </TouchableOpacity>
                 </View>
                 {loading ? (
                   <ActivityIndicator style={{ marginTop: 20 }} />
@@ -1080,53 +1061,148 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 <Text style={styles.panelText}>Profile and app settings (placeholder).</Text>
               </View>
             )}
+            {activeTab === 'Profile' && (
+              <View style={{ flex: 1 }}>
+                <SuperadminProfile
+                  user={user}
+                  onBack={() => setActiveTab('Dashboard')}
+                  onNavigate={(route) => setInfoScreen(route)}
+                />
+              </View>
+            )}
+
+            {/* Full page info screens opened from Profile - render in content area */}
+            {infoScreen === 'AboutUs' && (
+              <View style={{ flex: 1 }}>
+                <AboutUs onClose={() => setInfoScreen(null)} />
+              </View>
+            )}
+            {infoScreen === 'PrivacyPolicy' && (
+              <View style={{ flex: 1 }}>
+                <PrivacyPolicy onClose={() => setInfoScreen(null)} />
+              </View>
+            )}
+            {infoScreen === 'TermsAndConditions' && (
+              <View style={{ flex: 1 }}>
+                <TermsAndConditions onClose={() => setInfoScreen(null)} />
+              </View>
+            )}
           </View>
 
           {/* Modals kept same as before */}
-          <Modal
+          <PopupBox
             visible={modalVisible}
-            animationType="slide"
-            onRequestClose={() => setModalVisible(false)}
+            onClose={() => {
+              setModalVisible(false);
+              setEditingSociety(null);
+            }}
+            title={editingSociety ? 'Edit Society' : 'Add Society'}
+            dismissable={true}
+            showFooter={true}
+            footerContent={
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#ef4444', flex: 1, marginRight: 8 }]}
+                  onPress={() => {
+                    setModalVisible(false);
+                    setEditingSociety(null);
+                    setForm({
+                      name: '',
+                      country: '',
+                      city: '',
+                      area: '',
+                      mobile_number: '',
+                      builder_name: '',
+                      image_url: '',
+                    });
+                  }}
+                >
+                  <Text style={styles.modalBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#4f46e5', flex: 1, marginLeft: 8 }]}
+                  onPress={editingSociety ? handleEditSave : handleAddSociety}
+                >
+                  <Text style={styles.modalBtnText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            }
           >
-            <View style={styles.modalInner}>
-              <Text style={styles.modalTitle}>
-                {editingSociety ? 'Edit Society' : 'Add Society'}
+            <View>
+              {/* Name */}
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 6 }}>
+                Name
               </Text>
               <TextInput
-                placeholder="Name"
+                placeholder="Ex: Green Meadows Society"
+                placeholderTextColor="#9ca3af"
                 value={form.name}
                 onChangeText={(t) => setForm((p) => ({ ...p, name: t }))}
                 style={styles.input}
               />
+
+              {/* Admin mobile (shown when editing) */}
               {editingSociety ? (
-                <TextInput
-                  placeholder="Mobile (admin)"
-                  value={form.mobile_number}
-                  onChangeText={(t) => setForm((p) => ({ ...p, mobile_number: t }))}
-                  style={styles.input}
-                  keyboardType="phone-pad"
-                />
+                <>
+                  <Text
+                    style={{ fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 6 }}
+                  >
+                    Admin mobile
+                  </Text>
+                  <TextInput
+                    placeholder="Ex: +91 98765 43210"
+                    placeholderTextColor="#9ca3af"
+                    value={form.mobile_number}
+                    onChangeText={(t) => setForm((p) => ({ ...p, mobile_number: t }))}
+                    style={styles.input}
+                    keyboardType="phone-pad"
+                  />
+                </>
               ) : null}
+
+              {/* Country */}
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 6 }}>
+                Country
+              </Text>
               <TextInput
-                placeholder="Country"
+                placeholder="Ex: India"
+                placeholderTextColor="#9ca3af"
                 value={form.country}
                 onChangeText={(t) => setForm((p) => ({ ...p, country: t }))}
                 style={styles.input}
               />
+
+              {/* City */}
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 6 }}>
+                City
+              </Text>
               <TextInput
-                placeholder="City"
+                placeholder="Ex: Pune"
+                placeholderTextColor="#9ca3af"
                 value={form.city}
                 onChangeText={(t) => setForm((p) => ({ ...p, city: t }))}
                 style={styles.input}
               />
+
+              {/* Area */}
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 6 }}>
+                Area
+              </Text>
               <TextInput
-                placeholder="Area"
+                placeholder="Ex: Wakad"
+                placeholderTextColor="#9ca3af"
                 value={form.area}
                 onChangeText={(t) => setForm((p) => ({ ...p, area: t }))}
                 style={styles.input}
               />
+
+              {/* Builder name */}
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 6 }}>
+                Builder name
+              </Text>
               <TextInput
-                placeholder="Builder name (optional)"
+                placeholder="Ex: ABC Builders (optional)"
+                placeholderTextColor="#9ca3af"
                 value={form.builder_name}
                 onChangeText={(t) => setForm((p) => ({ ...p, builder_name: t }))}
                 style={styles.input}
@@ -1166,35 +1242,8 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                   </>
                 ) : null}
               </View>
-              <View style={styles.modalActions}>
-                <TouchableOpacity
-                  style={[styles.modalBtn, { backgroundColor: '#ef4444' }]}
-                  onPress={() => {
-                    setModalVisible(false);
-                    setEditingSociety(null);
-                    // Clear form on cancel so subsequent Add starts blank
-                    setForm({
-                      name: '',
-                      country: '',
-                      city: '',
-                      area: '',
-                      mobile_number: '',
-                      builder_name: '',
-                      image_url: '',
-                    });
-                  }}
-                >
-                  <Text style={styles.modalBtnText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalBtn, { backgroundColor: '#4f46e5' }]}
-                  onPress={editingSociety ? handleEditSave : handleAddSociety}
-                >
-                  <Text style={styles.modalBtnText}>Save</Text>
-                </TouchableOpacity>
-              </View>
             </View>
-          </Modal>
+          </PopupBox>
 
           <Modal
             visible={!!creatingAdminFor || !!editingAdmin}
@@ -1347,7 +1396,8 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                         return;
                       }
                       const res = await ImagePicker.launchImageLibraryAsync({
-                        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                        // avoid deprecated ImagePicker.MediaTypeOptions API; use MediaType when available or fallback to 'images'
+                        mediaTypes: (ImagePicker as any).MediaType?.images || 'images',
                         quality: 0.8,
                       });
                       const cancelled =
@@ -1467,6 +1517,3 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
     </>
   );
 }
-
-import styles from '../styles/superadminStyles';
-import ConfirmBox from '../components/ConfirmBox';

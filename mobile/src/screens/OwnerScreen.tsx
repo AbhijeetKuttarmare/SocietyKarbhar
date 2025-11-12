@@ -1876,7 +1876,9 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
                                           return;
                                         }
                                         const res = await ImagePicker.launchImageLibraryAsync({
-                                          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                                          // avoid deprecated ImagePicker.MediaTypeOptions API; use MediaType when available or fallback to 'images'
+                                          mediaTypes:
+                                            (ImagePicker as any).MediaType?.images || 'images',
                                           allowsEditing: true,
                                           quality: 0.8,
                                           base64: false,

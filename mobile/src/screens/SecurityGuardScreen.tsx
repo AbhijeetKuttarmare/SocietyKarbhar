@@ -450,7 +450,8 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
         return;
       }
       const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        // avoid deprecated ImagePicker.MediaTypeOptions API; use MediaType when available or fallback to 'images'
+        mediaTypes: (ImagePicker as any).MediaType?.images || 'images',
         quality: 0.8,
       });
       const cancelled = (res as any).canceled === true || (res as any).cancelled === true;
