@@ -71,7 +71,7 @@ export default function AddCamera({ onSaved, onCancel }: Props) {
       <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Main Gate" />
 
       <Text style={styles.label}>IP Address</Text>
-      <TextInput style={styles.input} value={ip} onChangeText={setIp} placeholder="192.168.1.10" />
+      <TextInput style={styles.input} value={ip} onChangeText={setIp} placeholder="192.168.1.4" />
 
       <Text style={styles.label}>Port</Text>
       <TextInput

@@ -8,7 +8,6 @@ import {
   TextInput,
   TouchableOpacity,
   Modal,
-  ScrollView,
   ActivityIndicator,
   useWindowDimensions,
   Image,
@@ -23,10 +22,22 @@ import { BottomTabContext } from '../contexts/BottomTabContext';
 import ProfileCard from '../components/ProfileCard';
 import OwnerScreen from './OwnerScreen';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
+import TenantProfile from '../components/TenantProfile';
+import TenantDashboard from './Tenant/TenantDashboard';
+import TenantOwnerInfo from './Tenant/TenantOwnerInfo';
+import TenantDocuments from './Tenant/TenantDocuments';
+import TenantBills from './Tenant/TenantBills';
+import TenantComplaints from './Tenant/TenantComplaints';
+import TenantNotices from './Tenant/TenantNotices';
+import TenantAgreement from './Tenant/TenantAgreement';
+import TenantSupport from './Tenant/TenantSupport';
+import TenantHelplines from './Tenant/TenantHelplines';
+import TenantRent from './Tenant/TenantRent';
+import ConfirmBox from '../components/ConfirmBox';
 
-type Props = { user: any; onLogout: () => void };
+type Props = { user: any; onLogout: () => void; navigation?: any };
 
-export default function TenantScreen({ user, onLogout }: Props) {
+export default function TenantScreen({ user, onLogout, navigation }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width < 700;
 
@@ -38,113 +49,80 @@ export default function TenantScreen({ user, onLogout }: Props) {
     | 'rent'
     | 'maintenance'
     | 'notices'
+    | 'complaints'
     | 'agreement'
     | 'support'
-    | 'complaints'
     | 'helplines'
   >('home');
-  const [profile, setProfile] = useState<any>(
-    user || { name: '', phone: '', email: '', address: '', emergency_contact: '' }
-  );
-
-  useEffect(() => {
-    // keep local profile in sync if parent `user` prop changes
-    setProfile(user || { name: '', phone: '', email: '', address: '', emergency_contact: '' });
-  }, [user]);
-  const [ownerProfile, setOwnerProfile] = useState<any | null>(null);
-  const [documents, setDocuments] = useState<any[]>([]);
-  const [showPreviewModal, setShowPreviewModal] = useState(false);
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
-  const [uploadingAadhaar, setUploadingAadhaar] = useState(false);
-  const [uploadingPan, setUploadingPan] = useState(false);
-  const [uploadingDocId, setUploadingDocId] = useState<string | null>(null);
-
-  // UI state for various modals and tenant lists (minimal defaults to satisfy render)
-  // sidebar removed for tenants (no drawer/menu)
-  const [showNoticeModal, setShowNoticeModal] = useState(false);
-  const [noticesCount, setNoticesCount] = useState(0);
-  const [notices, setNotices] = useState<any[]>([]);
+  // Local UI state
+  const [profileRefetch, setProfileRefetch] = useState(false);
   const [showOwnerDashboard, setShowOwnerDashboard] = useState(false);
   const [ownerOpenRequest, setOwnerOpenRequest] = useState(false);
-
-  const [agreements, setAgreements] = useState<any[]>([]);
+  const [documents, setDocuments] = useState<any[]>([]);
   const [maintenance, setMaintenance] = useState<any[]>([]);
-  const [maintenanceFilter, setMaintenanceFilter] = useState<'all' | 'bills' | 'complaints'>('all');
-  const [rentHistory, setRentHistory] = useState<any[]>([]);
-
+  const [agreements, setAgreements] = useState<any[]>([]);
+  const [notices, setNotices] = useState<any[]>([]);
+  const [noticesCount, setNoticesCount] = useState<number>(0);
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [profile, setProfile] = useState<any>(user || null);
+  const [ownerProfile, setOwnerProfile] = useState<any>(null);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [showNoticeModal, setShowNoticeModal] = useState(false);
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
   const [showMarkPaidModal, setShowMarkPaidModal] = useState(false);
-  const [selectedBill, setSelectedBill] = useState<any | null>(null);
-
-  const [showHelplineModal, setShowHelplineModal] = useState(false);
+  const [selectedBill, setSelectedBill] = useState<any>(null);
+  const [showComplaintModal, setShowComplaintModal] = useState(false);
+  const [complaintForm, setComplaintForm] = useState<{
+    title: string;
+    description: string;
+    image: string | null;
+  }>({ title: '', description: '', image: null });
+  const [showSupportModal, setShowSupportModal] = useState(false);
+  const [supportForm, setSupportForm] = useState<{ message: string; image: string | null }>({
+    message: '',
+    image: null,
+  });
   const [helplines, setHelplines] = useState<any[]>([]);
   const [helplineName, setHelplineName] = useState('');
   const [helplinePhone, setHelplinePhone] = useState('');
+  const [showHelplineModal, setShowHelplineModal] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [maintenanceFilter, setMaintenanceFilter] = useState<'all' | 'bills' | 'complaints'>('all');
+  const [rentHistory, setRentHistory] = useState<any[]>([]);
 
-  // complaint/support modal states (kept lightweight to avoid large refactors)
-  const [showComplaintModal, setShowComplaintModal] = useState(false);
-  const [complaintForm, setComplaintForm] = useState({ title: '', description: '', image: '' });
-  const [complaints, setComplaints] = useState<any[]>([]);
-
-  const [showSupportModal, setShowSupportModal] = useState(false);
-  const [supportForm, setSupportForm] = useState({ message: '', image: '' });
-
-  // helper to pick a file and upload (used by complaint/support attachments)
-  async function pickFile(cb: (uri: string) => void) {
+  async function pickFile(cb: (uri: string | null) => void) {
     try {
-      const url = await pickAndUploadFile({ accept: 'image/*', fallbackApiPath: '/api/upload' });
-      if (url) cb(url);
+      const url = await pickAndUploadFile();
+      cb(url || null);
     } catch (e) {
       console.warn('pickFile failed', e);
     }
   }
 
-  // submit complaint — small, robust implementation with optimistic fallback
   async function submitComplaint() {
     try {
       const payload: any = { title: complaintForm.title, description: complaintForm.description };
-      if (complaintForm.image) payload.file_url = complaintForm.image;
-      // Prefer dedicated complaints endpoint. If not available, fall back to maintenance endpoints for older servers.
+      if (complaintForm.image) payload.image = complaintForm.image;
       let posted = false;
       try {
         const r = await api.post('/api/tenant/complaints', payload);
         if (r && r.data && (r.data.complaint || r.data.complaints)) {
           const c = r.data.complaint || r.data.complaints;
-          setComplaints((s) => [c, ...s]);
+          setComplaints((s) => [c, ...(s || [])]);
           posted = true;
         }
       } catch (err) {
-        // ignore and try maintenance fallback
-      }
-
-      if (!posted) {
+        // try owner-scoped endpoints as a fallback
         try {
-          const r = await api.post('/api/tenant/maintenance', payload);
-          if (r && r.data && (r.data.complaint || r.data.maintenance)) {
-            const c = r.data.complaint || r.data.maintenance;
-            setComplaints((s) => [c, ...s]);
+          const r2 = await api.post('/api/owner/complaints', payload);
+          if (r2 && r2.data && (r2.data.complaint || r2.data.complaints)) {
+            const c2 = r2.data.complaint || r2.data.complaints;
+            setComplaints((s) => [c2, ...(s || [])]);
             posted = true;
           }
-        } catch (err2) {
-          // try owner-scoped endpoints as last network fallback
-          try {
-            const r2 = await api.post('/api/owner/complaints', payload);
-            if (r2 && r2.data && (r2.data.complaint || r2.data.complaints)) {
-              const c2 = r2.data.complaint || r2.data.complaints;
-              setComplaints((s) => [c2, ...s]);
-              posted = true;
-            }
-          } catch (e2) {
-            try {
-              const r3 = await api.post('/api/owner/maintenance', payload);
-              if (r3 && r3.data && r3.data.maintenance) {
-                setComplaints((s) => [r3.data.maintenance, ...s]);
-                posted = true;
-              }
-            } catch (e3) {
-              /* network fallback below */
-            }
-          }
+        } catch (e2) {
+          // last-resort fallback ignored
         }
       }
 
@@ -279,7 +257,11 @@ export default function TenantScreen({ user, onLogout }: Props) {
   }
 
   // maintenance helpers (lightweight placeholders)
-  const [maintenanceForm, setMaintenanceForm] = useState({ title: '', description: '', image: '' });
+  const [maintenanceForm, setMaintenanceForm] = useState<{
+    title: string;
+    description: string;
+    image: string | null;
+  }>({ title: '', description: '', image: null });
   const [proofUri, setProofUri] = useState<string | null>(null);
   const [uploadingProof, setUploadingProof] = useState<boolean>(false);
 
@@ -479,7 +461,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
               <Ionicons name="settings" size={22} color={showOwnerDashboard ? '#6C5CE7' : '#111'} />
             </TouchableOpacity>
           ) : null}
-          <TouchableOpacity onPress={onLogout}>
+          <TouchableOpacity onPress={() => setShowLogoutConfirm(true)}>
             <Ionicons name="log-out-outline" size={22} color="#111" />
           </TouchableOpacity>
         </View>
@@ -550,7 +532,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
                 </View>
                 <View style={styles.sidebarFooter}>
                   <TouchableOpacity
-                    onPress={onLogout}
+                    onPress={() => setShowLogoutConfirm(true)}
                     style={{ flexDirection: 'row', alignItems: 'center' }}
                   >
                     <Ionicons name="log-out" size={18} color="#fff" />
@@ -565,7 +547,7 @@ export default function TenantScreen({ user, onLogout }: Props) {
 
               {/* Permanent Add Tenant banner removed per request */}
 
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+              <View style={{ flex: 1, padding: 16 }}>
                 {tab === 'home' && (
                   <>
                     <View style={styles.statsRow}>
@@ -657,472 +639,69 @@ export default function TenantScreen({ user, onLogout }: Props) {
                 )}
 
                 {tab === 'profile' && (
-                  <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>My Profile</Text>
-                    <ProfileCard
-                      name={profile?.name}
-                      phone={profile?.phone}
-                      email={profile?.email}
-                      address={profile?.address}
-                      imageUri={profile?.avatar}
-                      onEdit={async () => {
-                        try {
-                          const url = await pickAndUploadProfile();
-                          if (!url) return; // user cancelled
-                          const res = await api.put('/api/user', { avatar: url });
-                          if (res && res.data && res.data.user) {
-                            setProfile(res.data.user);
-                            try {
-                              await AsyncStorage.setItem('user', JSON.stringify(res.data.user));
-                            } catch (e) {
-                              console.warn('failed to persist user in AsyncStorage', e);
-                            }
-                          } else {
-                            // optimistic fallback
-                            setProfile((p: any) => ({ ...(p || {}), avatar: url }));
-                            try {
-                              const raw = await AsyncStorage.getItem('user');
-                              if (raw) {
-                                const parsed = JSON.parse(raw);
-                                const merged = { ...(parsed || {}), avatar: url };
-                                await AsyncStorage.setItem('user', JSON.stringify(merged));
-                              }
-                            } catch (e) {
-                              /* ignore */
-                            }
-                          }
-                          // success handled by global notifier
-                        } catch (e) {
-                          console.warn('upload profile failed', e);
-                          // error handled by global notifier
-                        }
-                      }}
-                      onCall={(p) => {
-                        try {
-                          Linking.openURL(`tel:${p}`);
-                        } catch (e) {}
-                      }}
-                    />
-                    <TextInput
-                      style={styles.input}
-                      value={profile.name}
-                      onChangeText={(t) => setProfile((p: any) => ({ ...p, name: t }))}
-                      placeholder="Name"
-                    />
-                    <TextInput
-                      style={styles.input}
-                      value={profile.phone}
-                      onChangeText={(t) => setProfile((p: any) => ({ ...p, phone: t }))}
-                      placeholder="Phone"
-                      keyboardType="phone-pad"
-                    />
-
-                    <Text
-                      style={{ marginTop: 6, marginBottom: 4, color: '#374151', fontWeight: '700' }}
-                    >
-                      Email address
-                    </Text>
-                    <TextInput
-                      style={styles.input}
-                      value={profile.email}
-                      onChangeText={(t) => setProfile((p: any) => ({ ...p, email: t }))}
-                      placeholder="Email"
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                    />
-
-                    <Text
-                      style={{ marginTop: 6, marginBottom: 4, color: '#374151', fontWeight: '700' }}
-                    >
-                      Emergency contact number
-                    </Text>
-                    <TextInput
-                      style={styles.input}
-                      value={profile.emergency_contact}
-                      onChangeText={(t) => setProfile((p: any) => ({ ...p, emergency_contact: t }))}
-                      placeholder="Emergency contact"
-                      keyboardType="phone-pad"
-                    />
-
-                    <Text
-                      style={{ marginTop: 6, marginBottom: 4, color: '#374151', fontWeight: '700' }}
-                    >
-                      Permanent address
-                    </Text>
-                    <TextInput
-                      style={[styles.input, { height: 80 }]}
-                      value={profile.address}
-                      onChangeText={(t) => setProfile((p: any) => ({ ...p, address: t }))}
-                      placeholder="Permanent address"
-                      multiline
-                    />
-                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-                      <Button title="Save" onPress={saveProfile} />
-                    </View>
-
-                    {/* Tenant documents shown in profile tab (parity with Owner/Admin profile view) */}
-                    <View style={{ marginTop: 12 }}>
-                      <Text style={[styles.sectionTitle, { marginBottom: 8 }]}>
-                        Upload Document
-                      </Text>
-                      {(() => {
-                        // dedupe by title so Aadhaar/PAN don't appear multiple times
-                        const seen = new Set<string>();
-                        const deduped = (documents || []).filter((d: any) => {
-                          const key = String((d.title || d.name || '').toLowerCase()).trim();
-                          if (!key) return false;
-                          if (seen.has(key)) return false;
-                          seen.add(key);
-                          return true;
-                        });
-                        if (!deduped || deduped.length === 0)
-                          return <Text style={styles.muted}>No documents uploaded</Text>;
-
-                        return deduped.map((d: any) => (
-                          <View key={d.id} style={styles.listItem}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.listTitle}>
-                                {d.title || d.name || 'Document'}
-                              </Text>
-                            </View>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <TouchableOpacity
-                                style={{ padding: 8 }}
-                                onPress={async () => {
-                                  try {
-                                    setUploadingDocId(d.id);
-                                    const url = await pickAndUploadFile({
-                                      accept: '*/*',
-                                      fallbackApiPath: '/api/tenant/upload',
-                                    });
-                                    if (!url) return;
-                                    // optimistic update
-                                    setDocuments((s) =>
-                                      (s || []).map((x: any) =>
-                                        x.id === d.id ? { ...x, file_url: url } : x
-                                      )
-                                    );
-                                    // persist to backend and prefer server-returned document when available
-                                    await saveDocumentToServer(
-                                      {
-                                        title: d.title || d.name || 'Document',
-                                        file_url: url,
-                                        userId: profile?.id,
-                                      },
-                                      d.id
-                                    );
-                                  } catch (e) {
-                                    console.warn('upload failed', e);
-                                    // error handled by global notifier
-                                  } finally {
-                                    setUploadingDocId(null);
-                                  }
-                                }}
-                              >
-                                {uploadingDocId === d.id ? (
-                                  <ActivityIndicator size="small" />
-                                ) : (
-                                  <Ionicons name="cloud-upload-outline" size={20} color="#2563eb" />
-                                )}
-                              </TouchableOpacity>
-
-                              {d && d.file_url ? (
-                                <TouchableOpacity
-                                  style={{ padding: 8, marginLeft: 6 }}
-                                  onPress={() => {
-                                    setPreviewImageUrl(d.file_url || d.uri || null);
-                                    setShowPreviewModal(true);
-                                  }}
-                                >
-                                  <Ionicons name="eye-outline" size={20} color="#2563eb" />
-                                </TouchableOpacity>
-                              ) : null}
-                            </View>
-                          </View>
-                        ));
-                      })()}
-                    </View>
-                  </View>
+                  <TenantProfile
+                    user={user}
+                    onLogout={onLogout}
+                    refetch={profileRefetch}
+                    navigation={navigation}
+                  />
                 )}
 
-                {tab === 'owner' && (
-                  <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>My Owner</Text>
-                    {ownerProfile ? (
-                      <View style={styles.ownerCard}>
-                        {ownerProfile.avatar || ownerProfile.image ? (
-                          <Image
-                            source={{ uri: ownerProfile.avatar || ownerProfile.image }}
-                            style={styles.ownerImageLarge}
-                          />
-                        ) : (
-                          <View style={styles.ownerImagePlaceholder}>
-                            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 32 }}>
-                              {(ownerProfile.name || 'O').charAt(0).toUpperCase()}
-                            </Text>
-                          </View>
-                        )}
-
-                        <View style={{ marginTop: 12 }}>
-                          <Text style={styles.ownerLabel}>Full name</Text>
-                          <Text style={styles.ownerValue}>{ownerProfile.name || '—'}</Text>
-
-                          <Text style={[styles.ownerLabel, { marginTop: 10 }]}>Full address</Text>
-                          <Text style={styles.ownerValue}>{ownerProfile.address || '—'}</Text>
-
-                          <Text style={[styles.ownerLabel, { marginTop: 10 }]}>Email</Text>
-                          <Text style={styles.ownerValue}>{ownerProfile.email || '—'}</Text>
-
-                          <Text style={[styles.ownerLabel, { marginTop: 10 }]}>
-                            Emergency contact
-                          </Text>
-                          <Text style={styles.ownerValue}>
-                            {ownerProfile.emergency_contact || '—'}
-                          </Text>
-                        </View>
-                      </View>
-                    ) : (
-                      <Text style={styles.muted}>Owner information not available.</Text>
-                    )}
-                  </View>
-                )}
+                {tab === 'owner' && <TenantOwnerInfo ownerProfile={ownerProfile} styles={styles} />}
 
                 {tab === 'documents' && (
-                  <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>My Documents</Text>
-                    {documents.map((d) => (
-                      <View key={d.id} style={styles.listItem}>
-                        <Text style={styles.listTitle}>{d.title}</Text>
-                        <TouchableOpacity
-                          onPress={() => {
-                            // Open file - no alert
-                            setPreviewImageUrl(d.file_url || d.uri || null);
-                            setShowPreviewModal(true);
-                          }}
-                        >
-                          <Text style={styles.link}>View</Text>
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </View>
+                  <TenantDocuments
+                    documents={documents}
+                    styles={styles}
+                    handlePreview={(url: string) => {
+                      setPreviewImageUrl(url);
+                      setShowPreviewModal(true);
+                    }}
+                  />
                 )}
 
                 {tab === 'rent' && (
-                  <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Rent Details</Text>
-                    <View style={styles.card}>
-                      <Text>Monthly Rent: ₹{agreements[0]?.rent ?? sampleAgreement.rent}</Text>
-                      <Text>Deposit: ₹{agreements[0]?.deposit ?? sampleAgreement.deposit}</Text>
-                    </View>
-                    <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Payment History</Text>
-                    {rentHistory.map((r) => (
-                      <View key={r.id} style={styles.rowBetween}>
-                        <Text>
-                          {r.date} • ₹{r.amount}
-                        </Text>
-                        <Text style={{ color: r.status === 'paid' ? '#10b981' : '#ef4444' }}>
-                          {r.status}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
+                  <TenantRent agreements={agreements} rentHistory={rentHistory} styles={styles} />
                 )}
 
                 {tab === 'maintenance' && (
-                  <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Maintenance Requests</Text>
-                    {/* New Request button removed per UI request */}
-                    {(() => {
-                      const displayed = (maintenance || []).filter((it: any) => {
-                        if (maintenanceFilter === 'all') return true;
-                        if (maintenanceFilter === 'bills') return it._type === 'bill';
-                        if (maintenanceFilter === 'complaints') return it._type !== 'bill';
-                        return true;
-                      });
-                      if (displayed.length === 0) {
-                        return <Text style={styles.muted}>No maintenance requests yet.</Text>;
-                      }
-                      return displayed.map((m: any) => (
-                        <View key={m.id} style={styles.listItem}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.listTitle}>{m.title}</Text>
-                            <Text style={styles.listSub}>{m.description}</Text>
-                            {m._type === 'bill' ? (
-                              <View style={{ marginTop: 6 }}>
-                                <Text style={{ fontWeight: '700' }}>Amount: ₹{m.cost}</Text>
-                                <Text style={{ color: '#666', marginTop: 4 }}>
-                                  Type:{' '}
-                                  {m.type
-                                    ? String(m.type).charAt(0).toUpperCase() +
-                                      String(m.type).slice(1)
-                                    : 'Other'}
-                                </Text>
-                              </View>
-                            ) : null}
-                          </View>
-                          <View style={{ alignItems: 'flex-end' }}>
-                            <Text style={{ color: m.status === 'open' ? '#ff6b6b' : '#10b981' }}>
-                              {m.status}
-                            </Text>
-                            {m._type === 'bill' && m.status !== 'closed' ? (
-                              <TouchableOpacity
-                                style={[styles.smallBtn, { marginTop: 8 }]}
-                                onPress={() => {
-                                  setSelectedBill(m);
-                                  setShowMarkPaidModal(true);
-                                }}
-                              >
-                                <Text style={{ color: '#fff' }}>Mark Paid</Text>
-                              </TouchableOpacity>
-                            ) : null}
-                          </View>
-                        </View>
-                      ));
-                    })()}
-                  </View>
+                  <TenantBills
+                    maintenance={maintenance}
+                    styles={styles}
+                    setSelectedBill={setSelectedBill}
+                    setShowMarkPaidModal={setShowMarkPaidModal}
+                  />
                 )}
 
                 {tab === 'complaints' && (
-                  <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Complaints</Text>
-                    <View style={{ marginBottom: 8 }}>
-                      <Button title="Raise Complaint" onPress={() => setShowComplaintModal(true)} />
-                    </View>
-                    {complaints.length === 0 ? (
-                      <Text style={styles.muted}>No complaints yet.</Text>
-                    ) : (
-                      complaints.map((c: any) => (
-                        <View key={c.id} style={styles.listItem}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.listTitle}>{c.title}</Text>
-                            <Text style={styles.listSub}>{c.description}</Text>
-                          </View>
-                          <Text style={{ color: c.status === 'open' ? '#ff6b6b' : '#10b981' }}>
-                            {c.status}
-                          </Text>
-                        </View>
-                      ))
-                    )}
-                  </View>
+                  <TenantComplaints
+                    complaints={complaints}
+                    styles={styles}
+                    setShowComplaintModal={setShowComplaintModal}
+                  />
                 )}
 
                 {tab === 'notices' && (
-                  <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Notice Board</Text>
-                    <Button title="Refresh" onPress={fetchNotices} />
-                    {notices.map((n) => (
-                      <View key={n.id} style={styles.listItem}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.listTitle}>{n.title}</Text>
-                          <Text style={styles.listSub}>{n.description}</Text>
-                        </View>
-                        <Text style={styles.smallMuted}>
-                          {n.createdAt ? new Date(n.createdAt).toLocaleDateString() : ''}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
+                  <TenantNotices notices={notices} fetchNotices={fetchNotices} styles={styles} />
                 )}
 
                 {tab === 'helplines' && (
-                  <View style={styles.section}>
-                    <View
-                      style={{
-                        flexDirection: 'row',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <Text style={styles.sectionTitle}>Helplines</Text>
-                      {/* Only owners may add helplines; tenants see the list but cannot add */}
-                      {user && user.role === 'owner' ? (
-                        <TouchableOpacity
-                          style={styles.smallBtn}
-                          onPress={() => {
-                            setHelplineName('');
-                            setHelplinePhone('');
-                            setShowHelplineModal(true);
-                          }}
-                        >
-                          <Text style={{ color: '#fff' }}>Add Helpline</Text>
-                        </TouchableOpacity>
-                      ) : null}
-                    </View>
-
-                    {helplines.length === 0 ? (
-                      <View style={{ padding: 24 }}>
-                        <Text style={{ color: '#666' }}>No helplines available.</Text>
-                      </View>
-                    ) : (
-                      <FlatList
-                        data={helplines}
-                        keyExtractor={(h: any) => h.id || h.phone || String(h.name)}
-                        renderItem={({ item }) => (
-                          <View
-                            style={{
-                              paddingVertical: 8,
-                              flexDirection: 'row',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                            }}
-                          >
-                            <View>
-                              <Text style={{ fontWeight: '700' }}>
-                                {item.name || item.title || 'Help'}
-                              </Text>
-                              <Text style={{ color: '#666', marginTop: 4 }}>
-                                {item.phone || item.contact || ''}
-                              </Text>
-                            </View>
-                            <TouchableOpacity
-                              onPress={() => {
-                                try {
-                                  Linking.openURL(`tel:${item.phone || item.contact}`);
-                                } catch (e) {}
-                              }}
-                              style={[styles.smallBtn, { paddingHorizontal: 14 }]}
-                            >
-                              <Text style={{ color: '#fff' }}>Call</Text>
-                            </TouchableOpacity>
-                          </View>
-                        )}
-                      />
-                    )}
-                  </View>
+                  <TenantHelplines
+                    helplines={helplines}
+                    user={user}
+                    setShowHelplineModal={setShowHelplineModal}
+                    setHelplineName={setHelplineName}
+                    setHelplinePhone={setHelplinePhone}
+                    styles={styles}
+                  />
                 )}
 
                 {tab === 'agreement' && (
-                  <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Agreement Info</Text>
-                    {agreements.map((a) => (
-                      <View key={a.id} style={styles.card}>
-                        <Text>Start: {a.start_date}</Text>
-                        <Text>End: {a.end_date}</Text>
-                        <Text>Deposit: ₹{a.deposit}</Text>
-                      </View>
-                    ))}
-                  </View>
+                  <TenantAgreement agreement={agreements[0]} styles={styles} />
                 )}
 
-                {tab === 'support' && (
-                  <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Support / Contact Owner</Text>
-                    <Text style={styles.muted}>
-                      Send a message to your owner/manager. You can optionally attach an image.
-                    </Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Message"
-                      value={supportForm.message}
-                      onChangeText={(t) => setSupportForm((s) => ({ ...s, message: t }))}
-                      multiline
-                    />
-                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-                      <Button title="Send" onPress={submitSupport} />
-                    </View>
-                  </View>
-                )}
-              </ScrollView>
+                {tab === 'support' && <TenantSupport styles={styles} />}
+              </View>
             </View>
 
             {/* Notices modal */}

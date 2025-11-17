@@ -72,12 +72,12 @@ router.post('/otp/request', async (req, res) => {
     await OTP.create({ phone, code, expires_at });
     // TODO: send SMS via provider; for now log
     console.log(`OTP for ${phone}: ${code}`);
-    if (process.env.NODE_ENV === 'production') {
-      return res.json({ ok: true, message: 'OTP sent' });
-    } else {
-      // In development return the code so testing is easy without SMS
-      return res.json({ ok: true, message: 'OTP sent (dev)', code });
-    }
+    // if (process.env.NODE_ENV === 'production') {
+    //   return res.json({ ok: true, message: 'OTP sent' });
+    // } else {
+    // In development return the code so testing is easy without SMS
+    return res.json({ ok: true, message: 'OTP sent (dev)', code });
+    // }
   } catch (err) {
     console.error('[auth] OTP request error', err && (err.stack || err));
     // In non-production return the error message to help debugging; in production be generic

@@ -24,6 +24,7 @@ import api from '../services/api';
 import { defaultBaseUrl } from '../services/config';
 import { Ionicons } from '@expo/vector-icons';
 import ConfirmBox from '../components/ConfirmBox';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BottomTabContext } from '../contexts/BottomTabContext';
 import { notify } from '../services/notifier';
 import ProjectListItem from '../components/ProjectListItem';
@@ -112,6 +113,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
   const [confirmTitle, setConfirmTitle] = useState<string>('Are you sure?');
   const [confirmMessage, setConfirmMessage] = useState<string>('');
   const [confirmDanger, setConfirmDanger] = useState<boolean>(true);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showUserModal, setShowUserModal] = useState(false);
   const [showAddFlatModal, setShowAddFlatModal] = useState(false);
   const [newFlat, setNewFlat] = useState({ flat_no: '', buildingId: '' });
@@ -926,7 +928,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
               <Ionicons name="notifications-outline" size={20} />
             </TouchableOpacity>
             {/* three-dot header menu intentionally hidden per request */}
-            <TouchableOpacity style={styles.iconBtn} onPress={onLogout}>
+            <TouchableOpacity style={styles.iconBtn} onPress={() => setShowLogoutConfirm(true)}>
               <Ionicons name="log-out-outline" size={20} />
             </TouchableOpacity>
           </View>
@@ -1028,7 +1030,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
               </View>
             </ScrollView>
             <View style={styles.sidebarFooter}>
-              <TouchableOpacity onPress={onLogout} style={styles.logoutRow}>
+              <TouchableOpacity onPress={() => setShowLogoutConfirm(true)} style={styles.logoutRow}>
                 <Ionicons name="log-out-outline" size={18} color="#ffdbdb" />
                 <Text style={styles.logoutText}>Logout</Text>
               </TouchableOpacity>
@@ -1949,7 +1951,7 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
               <TouchableOpacity
                 onPress={() => {
                   setShowSidebar(false);
-                  onLogout();
+                  setShowLogoutConfirm(true);
                 }}
                 style={styles.logoutRow}
               >
@@ -1960,6 +1962,27 @@ export default function AdminScreen({ user, onLogout, setUser }: Props) {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      <ConfirmBox
+        visible={showLogoutConfirm}
+        title="Logout"
+        message="Are you sure you want to logout?"
+        danger={false}
+        confirmLabel="Logout"
+        cancelLabel="Cancel"
+        onCancel={() => setShowLogoutConfirm(false)}
+        onConfirm={async () => {
+          setShowLogoutConfirm(false);
+          try {
+            if (typeof onLogout === 'function') return onLogout();
+            try {
+              await AsyncStorage.removeItem('token');
+            } catch (er) {}
+          } catch (e) {
+            notify({ type: 'error', message: 'Logout failed' });
+          }
+        }}
+      />
 
       {/* Info screens modal (About / Privacy / Terms) opened from AdminProfile via navigation.navigate */}
       <Modal visible={!!infoScreen} animationType="slide" transparent>

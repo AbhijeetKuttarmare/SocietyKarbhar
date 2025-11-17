@@ -14,18 +14,18 @@ import {
   Alert,
   Linking,
 } from 'react-native';
-import { notify } from '../services/notifier';
-// Use dynamic require for DateTimePicker to avoid build-time type errors when package isn't installed
 import { Ionicons } from '@expo/vector-icons';
-// BottomTab removed for OwnerScreen (we render an inline bottom bar here)
-import ProfileCard from '../components/ProfileCard';
-// Use the legacy expo-file-system API to retain readAsStringAsync/EncodingType helpers
-// The modern filesystem API uses File/Directory classes; migrating is possible but larger.
-import * as FileSystem from 'expo-file-system/legacy';
-import api, { setAuthHeader, attachErrorHandler } from '../services/api';
-// WebView for in-app PDF rendering on native
-// attempt to require WebView optionally at runtime on native only.
-// We avoid a static require so the web bundler doesn't try to resolve the module.
+import ConfirmBox from '../components/ConfirmBox';
+import * as FileSystem from 'expo-file-system';
+import api from '../services/api';
+import { notify } from '../services/notifier';
+import OwnerDashboard from './Owner/OwnerDashboard';
+import OwnerNotices from './Owner/OwnerNotices';
+import OwnerHelplines from './Owner/OwnerHelplines';
+import OwnerTenants from './Owner/OwnerTenants';
+import OwnerSettings from './Owner/OwnerSettings';
+
+// Use dynamic require for DateTimePicker to avoid build-time type errors when package isn't installed
 let WebView: any = null;
 try {
   if (Platform && Platform.OS !== 'web') {
@@ -37,6 +37,7 @@ try {
   WebView = null;
   console.warn('[OwnerScreen] react-native-webview not available; in-app PDF viewing disabled');
 }
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { wp, hp, useWindowSize } from '../utils/responsive';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -47,6 +48,7 @@ type Props = {
   onLogout: () => void;
   openAddRequested?: boolean;
   onOpenHandled?: () => void;
+  navigation?: any;
 };
 
 // Sample data used for initial rendering and testing
@@ -100,10 +102,17 @@ const SAMPLE_BILLS = [
   },
 ];
 
-export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHandled }: Props) {
+export default function OwnerScreen({
+  user,
+  onLogout,
+  openAddRequested,
+  onOpenHandled,
+  navigation,
+}: Props) {
   const [activeTab, setActiveTab] = useState<
     'dashboard' | 'tenants' | 'bills' | 'documents' | 'settings' | 'notices' | 'helplines'
   >('dashboard');
+  const [profileRefetch, setProfileRefetch] = useState(false);
   // start with empty list; real data is fetched in useEffect via API
   const [tenants, setTenants] = useState<any[]>([]);
   const [bills, setBills] = useState<any[]>(SAMPLE_BILLS);
@@ -287,6 +296,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
   const [noticesCount, setNoticesCount] = useState<number>(0);
   const [noticesList, setNoticesList] = useState<any[]>([]);
   const [showNoticesModal, setShowNoticesModal] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   // Helplines state (missing previously and caused ReferenceError when OwnerScreen referenced showHelplineModal)
   const [showHelplineModal, setShowHelplineModal] = useState(false);
   const [helplines, setHelplines] = useState<any[]>([]);
@@ -306,7 +316,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
     amount: '',
     description: '',
   });
-  const [showProfileModal, setShowProfileModal] = useState(false);
+
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
     (user as any)?.avatar || (user as any)?.image
   );
@@ -330,6 +340,13 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
       emergency_contact: (user as any)?.emergency_contact || '',
     });
   }, [user]);
+
+  // Trigger profile refetch when switching to settings tab (which contains profile)
+  useEffect(() => {
+    if (activeTab === 'settings') {
+      setProfileRefetch((prev) => !prev);
+    }
+  }, [activeTab]);
 
   // Derived tenant lists / due map
   const filteredTenants = useMemo(() => {
@@ -1139,6 +1156,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
     <View style={[styles.statCard, isMobile ? styles.statCardMobile : {}]}>
       <Text style={styles.statTitle}>{title}</Text>
       <Text style={styles.statValue}>{value}</Text>
+      {/* ConfirmBox intentionally removed from StatCard so it doesn't depend on dashboard rendering */}
     </View>
   );
 
@@ -1163,6 +1181,31 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
   return (
     <View style={[styles.container, isDesktop ? styles.row : {}]}>
+      <ConfirmBox
+        visible={showLogoutConfirm}
+        title="Logout"
+        message="Are you sure you want to logout?"
+        danger={true}
+        confirmLabel="Logout"
+        cancelLabel="Cancel"
+        onCancel={() => setShowLogoutConfirm(false)}
+        onConfirm={() => {
+          setShowLogoutConfirm(false);
+          try {
+            if (typeof onLogout === 'function') return onLogout();
+            (async () => {
+              try {
+                await AsyncStorage.removeItem('token');
+              } catch (e) {}
+              if (navigation && navigation.reset)
+                navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+              else if (navigation && navigation.navigate) navigation.navigate('Login');
+            })();
+          } catch (e) {
+            notify({ type: 'error', message: 'Logout failed' });
+          }
+        }}
+      />
       {/* Sidebar for desktop, compact header for mobile/tablet */}
       {isDesktop ? (
         <View style={styles.sidebar}>
@@ -1206,14 +1249,14 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
               <Ionicons name="people" size={18} color="#fff" />
               <Text style={styles.menuText}>My Tenants</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={() => setShowProfileModal(true)}>
+            <TouchableOpacity style={styles.menuItem} onPress={() => setActiveTab('settings')}>
               <Ionicons name="person" size={18} color="#fff" />
               <Text style={styles.menuText}>Profile</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.sidebarFooter}>
             <TouchableOpacity
-              onPress={onLogout}
+              onPress={() => setShowLogoutConfirm(true)}
               style={{ flexDirection: 'row', alignItems: 'center' }}
             >
               <Ionicons name="log-out" size={18} color="#fff" />
@@ -1241,7 +1284,10 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
             >
               <Ionicons name="notifications" size={20} color="#333" />
             </TouchableOpacity>
-            <TouchableOpacity onPress={onLogout} style={[styles.iconAction, { marginLeft: 8 }]}>
+            <TouchableOpacity
+              onPress={() => setShowLogoutConfirm(true)}
+              style={[styles.iconAction, { marginLeft: 8 }]}
+            >
               <Ionicons name="log-out" size={20} color="#333" />
             </TouchableOpacity>
           </View>
@@ -1267,539 +1313,50 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
         <View style={{ flex: 1 }}>
           {activeTab === 'dashboard' && (
-            <ScrollView
-              contentContainerStyle={{
-                paddingBottom: 120 + insets.bottom,
-                paddingHorizontal: isMobile ? 6 : 0,
-              }}
-            >
-              <View>
-                {/* Stats arranged as requested: first row -> Total Tenants & Active; second row -> Previous & Maintenance
-                  Docs kept below and a Raise Complaint button added. */}
-                <View style={styles.statsRowRow}>
-                  <StatCard title="Total Tenants" value={stats.totalTenants} />
-                  <StatCard title="Active" value={stats.active} />
-                </View>
-                <View style={styles.statsRowRow}>
-                  <StatCard title="Previous" value={stats.previous} />
-                  <StatCard title="Bills" value={stats.billsAmount ? `₹${stats.billsAmount}` : 0} />
-                </View>
-                <View style={{ flexDirection: 'row', marginTop: 6 }}>
-                  <StatCard title="Docs" value={stats.documents} />
-                </View>
-                <View style={{ marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <TouchableOpacity
-                    style={[styles.smallBtn, { alignSelf: 'flex-start', marginRight: 8 }]}
-                    onPress={() => setShowOwnerComplaintModal(true)}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '700' }}>Raise Complaint</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.smallBtn,
-                      { alignSelf: 'flex-start', backgroundColor: '#1abc9c' },
-                    ]}
-                    onPress={() => setShowOwnerBillsModal(true)}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '700' }}>Bills</Text>
-                  </TouchableOpacity>
-                </View>
-                {/* Tenant financial summary: rent and documents (best-effort - payments/bills may not be tracked) */}
-                <View style={{ marginTop: 12 }}>
-                  <Text style={styles.sectionTitle}>Tenant Financials (current month)</Text>
-                  {tenants.length === 0 ? (
-                    <View style={{ padding: 12 }}>
-                      <Text style={{ color: '#666' }}>No tenants available.</Text>
-                    </View>
-                  ) : (
-                    tenants.map((t) => (
-                      <View
-                        key={t.id}
-                        style={{
-                          padding: 12,
-                          backgroundColor: '#fff',
-                          borderRadius: 8,
-                          marginBottom: 8,
-                        }}
-                      >
-                        <View
-                          style={{
-                            flexDirection: 'row',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                          }}
-                        >
-                          <View>
-                            <Text style={{ fontWeight: '700' }}>{t.name}</Text>
-                            <Text style={{ color: '#666' }}>{t.phone}</Text>
-                          </View>
-                          <View style={{ alignItems: 'flex-end' }}>
-                            <Text>Rent: ₹{t.rent || '—'}</Text>
-                            <View style={{ marginTop: 6, alignItems: 'flex-end' }}>
-                              {tenantDueMap[t.id] && tenantDueMap[t.id] > 0 ? (
-                                <View style={[styles.badge, { backgroundColor: '#e67e22' }]}>
-                                  <Text style={{ color: '#fff' }}>Due: ₹{tenantDueMap[t.id]}</Text>
-                                </View>
-                              ) : (
-                                <View style={[styles.badge, { backgroundColor: '#2ecc71' }]}>
-                                  <Text style={{ color: '#fff' }}>No due</Text>
-                                </View>
-                              )}
-                            </View>
-                          </View>
-                        </View>
-                      </View>
-                    ))
-                  )}
-                </View>
-                {/* Quick Actions moved to My Tenants - hidden on Dashboard per request */}
-              </View>
-            </ScrollView>
+            <OwnerDashboard
+              stats={stats}
+              setShowOwnerComplaintModal={setShowOwnerComplaintModal}
+              setShowOwnerBillsModal={setShowOwnerBillsModal}
+              tenants={tenants}
+              tenantDueMap={tenantDueMap}
+              insets={insets}
+              isMobile={isMobile}
+              styles={styles}
+            />
           )}
 
           {activeTab === 'notices' && (
-            <View>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
-              >
-                <Text style={styles.sectionTitle}>Notices</Text>
-                <TouchableOpacity style={styles.smallBtn} onPress={() => fetchNotices()}>
-                  <Text style={{ color: '#fff' }}>Refresh</Text>
-                </TouchableOpacity>
-              </View>
-              {noticesList.length === 0 ? (
-                <View style={{ padding: 24 }}>
-                  <Text style={{ color: '#666' }}>No notices found.</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={noticesList}
-                  keyExtractor={(n: any) => n.id}
-                  renderItem={({ item }) => (
-                    <View style={{ paddingVertical: 8 }}>
-                      <Text style={{ fontWeight: '700' }}>{item.title}</Text>
-                      <Text style={{ color: '#666', marginTop: 4 }}>{item.description}</Text>
-                      <Text style={{ color: '#999', marginTop: 6 }}>
-                        {item.createdAt ? new Date(item.createdAt).toLocaleString() : ''}
-                      </Text>
-                    </View>
-                  )}
-                />
-              )}
-            </View>
+            <OwnerNotices noticesList={noticesList} fetchNotices={fetchNotices} styles={styles} />
           )}
 
           {activeTab === 'helplines' && (
-            <View>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
-              >
-                <Text style={styles.sectionTitle}>Helplines</Text>
-                {/* Only owners can add helplines */}
-                {user && user.role === 'owner' ? (
-                  <TouchableOpacity
-                    style={styles.smallBtn}
-                    onPress={() => {
-                      setHelplineName('');
-                      setHelplinePhone('');
-                      setShowHelplineModal(true);
-                    }}
-                  >
-                    <Text style={{ color: '#fff' }}>Add Helpline</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-
-              {helplines.length === 0 ? (
-                <View style={{ padding: 24 }}>
-                  <Text style={{ color: '#666' }}>No helplines configured.</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={helplines}
-                  keyExtractor={(h: any) => h.id || h.phone || String(h.name)}
-                  renderItem={({ item }) => (
-                    <View
-                      style={{
-                        paddingVertical: 8,
-                        flexDirection: 'row',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <View>
-                        <Text style={{ fontWeight: '700' }}>
-                          {item.name || item.title || 'Help'}
-                        </Text>
-                        <Text style={{ color: '#666', marginTop: 4 }}>
-                          {item.phone || item.contact || ''}
-                        </Text>
-                      </View>
-                      <TouchableOpacity
-                        onPress={() => {
-                          try {
-                            Linking.openURL(`tel:${item.phone || item.contact}`);
-                          } catch (e) {}
-                        }}
-                        style={[styles.smallBtn, { paddingHorizontal: 14 }]}
-                      >
-                        <Text style={{ color: '#fff' }}>Call</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                />
-              )}
-            </View>
+            <OwnerHelplines
+              helplines={helplines}
+              user={user}
+              setShowHelplineModal={setShowHelplineModal}
+              setHelplineName={setHelplineName}
+              setHelplinePhone={setHelplinePhone}
+              styles={styles}
+            />
           )}
 
           {activeTab === 'tenants' && (
-            <View>
-              {/* If no tenants yet, show a clear empty state with big Add Tenant CTA (helps Expo web responsive) */}
-              {tenants.length === 0 && (
-                <View
-                  style={{
-                    padding: 18,
-                    backgroundColor: '#fff',
-                    borderRadius: 8,
-                    marginBottom: 12,
-                  }}
-                >
-                  <Text style={{ fontWeight: '800', fontSize: 16, marginBottom: 8 }}>
-                    No tenants found
-                  </Text>
-                  <Text style={{ color: '#666', marginBottom: 12 }}>
-                    You haven't added any tenants yet.
-                  </Text>
-                  {/* Add Tenant action removed per request */}
-                </View>
-              )}
-
-              <View
-                style={{
-                  flexDirection: 'row',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: 8,
-                }}
-              >
-                <Text style={{ color: '#666' }}>{tenants.length} tenants</Text>
-                <TouchableOpacity
-                  style={[styles.smallBtn, { paddingHorizontal: 12 }]}
-                  onPress={() => openAddTenant()}
-                >
-                  <Text style={{ color: '#fff', fontWeight: '700' }}>Add Tenant</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.filterRow}>
-                <View style={styles.searchBox}>
-                  <Ionicons name="search" size={16} color="#666" />
-                  <TextInput
-                    placeholder="Search"
-                    value={tenantQ}
-                    onChangeText={setTenantQ}
-                    style={{ marginLeft: 8, flex: 1 }}
-                  />
-                </View>
-                <View style={{ flexDirection: 'row', marginLeft: 8 }}>
-                  <TouchableOpacity
-                    style={[styles.filterBtn, tenantFilter === 'all' && styles.filterActive]}
-                    onPress={() => setTenantFilter('all')}
-                  >
-                    <Text>All</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.filterBtn, tenantFilter === 'active' && styles.filterActive]}
-                    onPress={() => setTenantFilter('active')}
-                  >
-                    <Text>Active</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.filterBtn, tenantFilter === 'inactive' && styles.filterActive]}
-                    onPress={() => setTenantFilter('inactive')}
-                  >
-                    <Text>Inactive</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {tenantFilter === 'all' ? (
-                <>
-                  <Text style={[styles.sectionTitle, { marginTop: 6 }]}>Active Tenants</Text>
-                  {activeTenants.length === 0 ? (
-                    <View style={{ padding: 12 }}>
-                      <Text style={{ color: '#666' }}>No active tenants.</Text>
-                    </View>
-                  ) : (
-                    <FlatList
-                      data={activeTenants}
-                      keyExtractor={(i: any) => i.id}
-                      renderItem={({ item }) => (
-                        <View style={styles.tenantCard}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.tenantName}>{item.name}</Text>
-                            <Text style={styles.tenantMeta}>
-                              {item.role || 'Tenant'} • {item.phone}
-                            </Text>
-                            {item.flat ? (
-                              <Text style={styles.tenantMeta}>Flat: {item.flat.flat_no}</Text>
-                            ) : null}
-                            <Text style={styles.tenantDates}>
-                              Rent: ₹{item.rent} • Move-in: {item.moveIn}{' '}
-                              {item.moveOut ? `• Move-out: ${item.moveOut}` : ''}
-                            </Text>
-                          </View>
-                          <View style={{ alignItems: 'flex-end' }}>
-                            <View
-                              style={[
-                                styles.badge,
-                                item.status === 'active'
-                                  ? styles.badgeActive
-                                  : styles.badgeInactive,
-                              ]}
-                            >
-                              <Text style={{ color: '#fff' }}>
-                                {item.status === 'active' ? 'Active' : 'Inactive'}
-                              </Text>
-                            </View>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <TouchableOpacity
-                                style={{ marginTop: 8, marginRight: 8 }}
-                                onPress={() => openAddTenant(item)}
-                              >
-                                <Ionicons name="eye" size={18} />
-                              </TouchableOpacity>
-                              {/* show agreement / document quick icons when available */}
-                              {item.history?.agreements && item.history.agreements.length > 0 ? (
-                                <TouchableOpacity
-                                  style={{ marginTop: 8, marginRight: 8 }}
-                                  onPress={() => {
-                                    try {
-                                      const agr = item.history.agreements[0];
-                                      const url =
-                                        agr && (agr.file_url || agr.fileUrl || agr.url || agr.path);
-                                      if (url) downloadAgreement(url);
-                                    } catch (e) {}
-                                  }}
-                                >
-                                  <Ionicons name="document-text" size={18} color="#374151" />
-                                </TouchableOpacity>
-                              ) : null}
-                              {item.history?.documents && item.history.documents.length > 0 ? (
-                                <TouchableOpacity
-                                  style={{ marginTop: 8, marginRight: 8 }}
-                                  onPress={() => {
-                                    try {
-                                      const doc = item.history.documents[0];
-                                      const url =
-                                        doc && (doc.file_url || doc.fileUrl || doc.url || doc.path);
-                                      if (url) handlePreview(url);
-                                    } catch (e) {}
-                                  }}
-                                >
-                                  <Ionicons name="document-attach" size={18} color="#374151" />
-                                </TouchableOpacity>
-                              ) : null}
-                              {statusLoading[item.id] ? (
-                                <ActivityIndicator
-                                  size="small"
-                                  color="#fff"
-                                  style={{ marginTop: 8 }}
-                                />
-                              ) : (
-                                <TouchableOpacity
-                                  style={[
-                                    styles.smallBtn,
-                                    { backgroundColor: '#e74c3c', marginTop: 8 },
-                                  ]}
-                                  onPress={() => toggleTenantStatus(item, 'inactive')}
-                                >
-                                  <Text style={{ color: '#fff' }}>Deactivate</Text>
-                                </TouchableOpacity>
-                              )}
-                            </View>
-                          </View>
-                        </View>
-                      )}
-                    />
-                  )}
-
-                  <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Inactive Tenants</Text>
-                  {inactiveTenants.length === 0 ? (
-                    <View style={{ padding: 12 }}>
-                      <Text style={{ color: '#666' }}>No inactive tenants.</Text>
-                    </View>
-                  ) : (
-                    <FlatList
-                      data={inactiveTenants}
-                      keyExtractor={(i: any) => i.id}
-                      renderItem={({ item }) => (
-                        <View style={styles.tenantCard}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.tenantName}>{item.name}</Text>
-                            <Text style={styles.tenantMeta}>
-                              {item.role || 'Tenant'} • {item.phone}
-                            </Text>
-                            {item.flat ? (
-                              <Text style={styles.tenantMeta}>Flat: {item.flat.flat_no}</Text>
-                            ) : null}
-                            <Text style={styles.tenantDates}>
-                              Rent: ₹{item.rent} • Move-in: {item.moveIn}{' '}
-                              {item.moveOut ? `• Move-out: ${item.moveOut}` : ''}
-                            </Text>
-                          </View>
-                          <View style={{ alignItems: 'flex-end' }}>
-                            <View
-                              style={[
-                                styles.badge,
-                                item.status === 'active'
-                                  ? styles.badgeActive
-                                  : styles.badgeInactive,
-                              ]}
-                            >
-                              <Text style={{ color: '#fff' }}>
-                                {item.status === 'active' ? 'Active' : 'Inactive'}
-                              </Text>
-                            </View>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <TouchableOpacity
-                                style={{ marginTop: 8, marginRight: 8 }}
-                                onPress={() => openAddTenant(item)}
-                              >
-                                <Ionicons name="eye" size={18} />
-                              </TouchableOpacity>
-                              {/* show agreement / document quick icons when available */}
-                              {item.history?.agreements && item.history.agreements.length > 0 ? (
-                                <TouchableOpacity
-                                  style={{ marginTop: 8, marginRight: 8 }}
-                                  onPress={() => {
-                                    try {
-                                      const agr = item.history.agreements[0];
-                                      const url =
-                                        agr && (agr.file_url || agr.fileUrl || agr.url || agr.path);
-                                      if (url) downloadAgreement(url);
-                                    } catch (e) {}
-                                  }}
-                                >
-                                  <Ionicons name="document-text" size={18} color="#374151" />
-                                </TouchableOpacity>
-                              ) : null}
-                              {item.history?.documents && item.history.documents.length > 0 ? (
-                                <TouchableOpacity
-                                  style={{ marginTop: 8, marginRight: 8 }}
-                                  onPress={() => {
-                                    try {
-                                      const doc = item.history.documents[0];
-                                      const url =
-                                        doc && (doc.file_url || doc.fileUrl || doc.url || doc.path);
-                                      if (url) handlePreview(url);
-                                    } catch (e) {}
-                                  }}
-                                >
-                                  <Ionicons name="document-attach" size={18} color="#374151" />
-                                </TouchableOpacity>
-                              ) : null}
-                            </View>
-                          </View>
-                        </View>
-                      )}
-                    />
-                  )}
-                </>
-              ) : (
-                <FlatList
-                  data={filteredTenants}
-                  keyExtractor={(i: any) => i.id}
-                  renderItem={({ item }) => (
-                    <View style={styles.tenantCard}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.tenantName}>{item.name}</Text>
-                        <Text style={styles.tenantMeta}>
-                          {item.role || 'Tenant'} • {item.phone}
-                        </Text>
-                        {item.flat ? (
-                          <Text style={styles.tenantMeta}>Flat: {item.flat.flat_no}</Text>
-                        ) : null}
-                        <Text style={styles.tenantDates}>
-                          Rent: ₹{item.rent} • Move-in: {item.moveIn}{' '}
-                          {item.moveOut ? `• Move-out: ${item.moveOut}` : ''}
-                        </Text>
-                      </View>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <View
-                          style={[
-                            styles.badge,
-                            item.status === 'active' ? styles.badgeActive : styles.badgeInactive,
-                          ]}
-                        >
-                          <Text style={{ color: '#fff' }}>
-                            {item.status === 'active' ? 'Active' : 'Inactive'}
-                          </Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <TouchableOpacity
-                            style={{ marginTop: 8, marginRight: 8 }}
-                            onPress={() => openAddTenant(item)}
-                          >
-                            <Ionicons name="eye" size={18} />
-                          </TouchableOpacity>
-                          {item.history?.agreements && item.history.agreements.length > 0 ? (
-                            <TouchableOpacity
-                              style={{ marginTop: 8, marginRight: 8 }}
-                              onPress={() => {
-                                try {
-                                  const agr = item.history.agreements[0];
-                                  const url =
-                                    agr && (agr.file_url || agr.fileUrl || agr.url || agr.path);
-                                  if (url) downloadAgreement(url);
-                                } catch (e) {}
-                              }}
-                            >
-                              <Ionicons name="document-text" size={18} color="#374151" />
-                            </TouchableOpacity>
-                          ) : null}
-                          {item.history?.documents && item.history.documents.length > 0 ? (
-                            <TouchableOpacity
-                              style={{ marginTop: 8, marginRight: 8 }}
-                              onPress={() => {
-                                try {
-                                  const doc = item.history.documents[0];
-                                  const url =
-                                    doc && (doc.file_url || doc.fileUrl || doc.url || doc.path);
-                                  if (url) handlePreview(url);
-                                } catch (e) {}
-                              }}
-                            >
-                              <Ionicons name="document-attach" size={18} color="#374151" />
-                            </TouchableOpacity>
-                          ) : null}
-                          {statusLoading[item.id] ? (
-                            <ActivityIndicator size="small" color="#fff" style={{ marginTop: 8 }} />
-                          ) : item.status === 'active' ? (
-                            <TouchableOpacity
-                              style={[
-                                styles.smallBtn,
-                                { backgroundColor: '#e74c3c', marginTop: 8 },
-                              ]}
-                              onPress={() => toggleTenantStatus(item, 'inactive')}
-                            >
-                              <Text style={{ color: '#fff' }}>Deactivate</Text>
-                            </TouchableOpacity>
-                          ) : null}
-                        </View>
-                      </View>
-                    </View>
-                  )}
-                />
-              )}
-            </View>
+            <OwnerTenants
+              tenants={tenants}
+              openAddTenant={openAddTenant}
+              tenantQ={tenantQ}
+              setTenantQ={setTenantQ}
+              tenantFilter={tenantFilter}
+              setTenantFilter={setTenantFilter}
+              activeTenants={activeTenants}
+              inactiveTenants={inactiveTenants}
+              filteredTenants={filteredTenants}
+              statusLoading={statusLoading}
+              downloadAgreement={downloadAgreement}
+              handlePreview={handlePreview}
+              toggleTenantStatus={toggleTenantStatus}
+              styles={styles}
+            />
           )}
 
           {activeTab === 'bills' && (
@@ -2245,124 +1802,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
           )}
 
           {activeTab === 'settings' && (
-            <View>
-              <Text style={styles.sectionTitle}>Profile</Text>
-              <View style={{ marginTop: 8 }}>
-                <Text style={styles.label}>Name</Text>
-                <TextInput
-                  style={styles.input}
-                  value={ownerProfile.name}
-                  onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), name: t }))}
-                />
-
-                <Text style={styles.label}>Phone</Text>
-                <TextInput
-                  style={styles.input}
-                  value={ownerProfile.phone}
-                  onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), phone: t }))}
-                  keyboardType="phone-pad"
-                />
-
-                <Text style={styles.label}>Full address</Text>
-                <TextInput
-                  style={styles.input}
-                  value={ownerProfile.address}
-                  onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), address: t }))}
-                />
-
-                <Text style={styles.label}>Email address</Text>
-                <TextInput
-                  style={styles.input}
-                  value={ownerProfile.email}
-                  onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), email: t }))}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
-
-                <Text style={styles.label}>Emergency contact number</Text>
-                <TextInput
-                  style={styles.input}
-                  value={ownerProfile.emergency_contact}
-                  onChangeText={(t) =>
-                    setOwnerProfile((s: any) => ({ ...(s || {}), emergency_contact: t }))
-                  }
-                  keyboardType="phone-pad"
-                />
-
-                <View style={{ height: 12 }} />
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <TouchableOpacity
-                    style={styles.smallBtn}
-                    onPress={async () => {
-                      try {
-                        setSavingProfile(true);
-                        const payload: any = {
-                          name: ownerProfile.name || null,
-                          phone: ownerProfile.phone || null,
-                          email: ownerProfile.email || null,
-                          address: ownerProfile.address || null,
-                          emergency_contact: ownerProfile.emergency_contact || null,
-                        };
-                        // remove nulls (backend expects only sent fields)
-                        Object.keys(payload).forEach((k) => {
-                          if (payload[k] === null) delete payload[k];
-                        });
-                        const r = await api.put('/api/user', payload);
-                        if (r && r.data && r.data.user) {
-                          const u = r.data.user;
-                          setOwnerProfile({
-                            name: u.name || '',
-                            phone: u.phone || u.mobile_number || '',
-                            email: u.email || '',
-                            address: u.address || '',
-                            emergency_contact: u.emergency_contact || '',
-                          });
-                          setUserAvatar(u.avatar || u.image || userAvatar);
-                          try {
-                            await AsyncStorage.setItem('user', JSON.stringify(u));
-                          } catch (e) {}
-                        }
-                        alert('Profile saved');
-                      } catch (e: any) {
-                        console.warn(
-                          'save owner profile failed',
-                          e && (e.response?.data || e.message)
-                        );
-                        alert('Failed to save profile');
-                      } finally {
-                        setSavingProfile(false);
-                      }
-                    }}
-                    disabled={savingProfile}
-                  >
-                    {savingProfile ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Text style={{ color: '#fff' }}>Save</Text>
-                    )}
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.smallBtnClose}
-                    onPress={() =>
-                      setOwnerProfile({
-                        name: (user as any)?.name || '',
-                        phone: (user as any)?.phone || (user as any)?.mobile_number || '',
-                        email: (user as any)?.email || '',
-                        address: (user as any)?.address || '',
-                        emergency_contact: (user as any)?.emergency_contact || '',
-                      })
-                    }
-                  >
-                    <Text style={styles.closeText}>Reset</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity style={styles.smallBtn}>
-                    <Text style={{ color: '#fff' }}>Change Password</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
+            <OwnerSettings user={user} refetch={profileRefetch} navigation={navigation} />
           )}
         </View>
       </View>
@@ -2778,7 +2218,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
               // Profile: open profile modal (Owner uses a modal for profile)
               if (it.key === 'profile') {
-                setShowProfileModal(true);
+                setActiveTab('settings');
                 return;
               }
 
@@ -2807,268 +2247,7 @@ export default function OwnerScreen({ user, onLogout, openAddRequested, onOpenHa
 
       {/* Floating quick-access controls removed per request */}
 
-      {/* Profile modal for Owner (opened from top-right icon or BottomTab 'Profile') */}
-      <Modal visible={showProfileModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalContent, { maxWidth: Math.min(420, wp(98)) }]}>
-            <Text style={{ fontWeight: '800', fontSize: 18, marginBottom: 8 }}>Profile</Text>
-            <ProfileCard
-              name={ownerProfile?.name || user?.name}
-              phone={ownerProfile?.phone || user?.phone}
-              email={ownerProfile?.email || user?.email}
-              address={ownerProfile?.address || user?.address || ''}
-              imageUri={
-                userAvatar ||
-                ownerProfile?.avatar ||
-                ownerProfile?.image ||
-                user?.avatar ||
-                user?.image
-              }
-              onEdit={async () => {
-                try {
-                  console.debug('[OwnerScreen] starting profile pickAndUploadProfile');
-                  const url = await pickAndUploadProfile();
-                  console.debug('[OwnerScreen] pickAndUploadProfile returned', url);
-                  if (!url) return; // cancelled
-                  const r = await api.put('/api/user', { avatar: url });
-                  console.debug('[OwnerScreen] PUT /api/user response', r && r.data);
-                  if (r && r.data && r.data.user) {
-                    const u = r.data.user;
-                    setUserAvatar(u.avatar || u.image || url);
-                    setOwnerProfile({
-                      name: u.name || '',
-                      phone: u.phone || u.mobile_number || '',
-                      email: u.email || '',
-                      address: u.address || '',
-                      emergency_contact: u.emergency_contact || '',
-                    });
-                    try {
-                      await AsyncStorage.setItem('user', JSON.stringify(u));
-                    } catch (e) {}
-                  } else {
-                    setUserAvatar(url);
-                  }
-                  alert('Profile photo updated');
-                } catch (err: any) {
-                  // show detailed error for debugging in dev
-                  const msg =
-                    (err && (err.response?.data || err.message)) || String(err) || 'unknown error';
-                  console.error('[OwnerScreen] owner profile upload failed', err);
-                  try {
-                    // show a helpful alert in the browser when testing
-                    alert('Upload failed: ' + (msg && JSON.stringify(msg)));
-                  } catch (e) {}
-                }
-              }}
-              onCall={(p) => {
-                try {
-                  Linking.openURL(`tel:${p}`);
-                } catch (e) {}
-              }}
-            />
-            {/* Editable fields shown inside the Profile modal so owner can edit inline */}
-            <View style={{ marginTop: 12 }}>
-              <Text style={styles.label}>Full address</Text>
-              <TextInput
-                style={styles.input}
-                value={ownerProfile.address}
-                onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), address: t }))}
-              />
-
-              <Text style={styles.label}>Email address</Text>
-              <TextInput
-                style={styles.input}
-                value={ownerProfile.email}
-                onChangeText={(t) => setOwnerProfile((s: any) => ({ ...(s || {}), email: t }))}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-
-              <Text style={styles.label}>Emergency contact number</Text>
-              <TextInput
-                style={styles.input}
-                value={ownerProfile.emergency_contact}
-                onChangeText={(t) =>
-                  setOwnerProfile((s: any) => ({ ...(s || {}), emergency_contact: t }))
-                }
-                keyboardType="phone-pad"
-              />
-
-              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-                <TouchableOpacity
-                  style={[styles.smallBtnClose, { marginRight: 8 }]}
-                  onPress={() =>
-                    setOwnerProfile({
-                      name: (user as any)?.name || '',
-                      phone: (user as any)?.phone || (user as any)?.mobile_number || '',
-                      email: (user as any)?.email || '',
-                      address: (user as any)?.address || '',
-                      emergency_contact: (user as any)?.emergency_contact || '',
-                    })
-                  }
-                >
-                  <Text style={styles.closeText}>Reset</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.smallBtn}
-                  onPress={async () => {
-                    try {
-                      setSavingProfile(true);
-                      const payload: any = {
-                        name: ownerProfile.name || null,
-                        phone: ownerProfile.phone || null,
-                        email: ownerProfile.email || null,
-                        address: ownerProfile.address || null,
-                        emergency_contact: ownerProfile.emergency_contact || null,
-                      };
-                      Object.keys(payload).forEach((k) => {
-                        if (payload[k] === null) delete payload[k];
-                      });
-                      const r = await api.put('/api/user', payload);
-                      // If server returns updated user, update local state and persist
-                      if (r && r.data && r.data.user) {
-                        const u = r.data.user;
-                        setOwnerProfile({
-                          name: u.name || '',
-                          phone: u.phone || u.mobile_number || '',
-                          email: u.email || '',
-                          address: u.address || '',
-                          emergency_contact: u.emergency_contact || '',
-                        });
-                        setUserAvatar(u.avatar || u.image || userAvatar);
-                        try {
-                          await AsyncStorage.setItem('user', JSON.stringify(u));
-                        } catch (e) {
-                          /* ignore persistence errors */
-                        }
-                      }
-                      alert('Profile saved');
-                      // close modal to reflect updated profile
-                      setShowProfileModal(false);
-                    } catch (e: any) {
-                      console.warn(
-                        'save owner profile failed',
-                        e && (e.response?.data || e.message)
-                      );
-                      alert('Failed to save profile');
-                    } finally {
-                      setSavingProfile(false);
-                    }
-                  }}
-                >
-                  {savingProfile ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Text style={{ color: '#fff' }}>Save</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-            {/* Aadhaar / ID documents if available (show view/upload buttons) */}
-            <View style={{ marginTop: 12 }}>
-              <Text style={{ fontWeight: '700' }}>Aadhaar / ID</Text>
-              {(() => {
-                const findDoc = (regex: RegExp) =>
-                  (propertyDocs || []).find((d: any) =>
-                    Boolean(
-                      (d.name && regex.test(String(d.name))) ||
-                        (d.title && regex.test(String(d.title))) ||
-                        (d.file_url && regex.test(String(d.file_url)))
-                    )
-                  );
-                const aadhaar = findDoc(/aadhaar|aadhar/i);
-                const pan = findDoc(/\bpan\b/i);
-
-                return (
-                  <>
-                    <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
-                      {aadhaar ? (
-                        <TouchableOpacity
-                          style={[
-                            styles.smallBtnClose,
-                            { flexDirection: 'row', alignItems: 'center' },
-                          ]}
-                          onPress={() => handlePreview(aadhaar.file_url || aadhaar.uri || null)}
-                        >
-                          <Ionicons name="eye-outline" size={16} color="#374151" />
-                          <Text style={{ marginLeft: 8 }}>View Aadhaar Card</Text>
-                        </TouchableOpacity>
-                      ) : (
-                        <TouchableOpacity
-                          style={styles.smallBtn}
-                          onPress={() => uploadPropertyDocAs('Aadhaar')}
-                          disabled={uploadingPropertyDoc}
-                        >
-                          {uploadingPropertyDoc ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                          ) : (
-                            <>
-                              <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
-                              <Text style={{ color: '#fff', marginLeft: 8 }}>Upload Aadhaar</Text>
-                            </>
-                          )}
-                        </TouchableOpacity>
-                      )}
-
-                      {pan ? (
-                        <TouchableOpacity
-                          style={[
-                            styles.smallBtnClose,
-                            { flexDirection: 'row', alignItems: 'center' },
-                          ]}
-                          onPress={() => handlePreview(pan.file_url || pan.uri || null)}
-                        >
-                          <Ionicons name="eye-outline" size={16} color="#374151" />
-                          <Text style={{ marginLeft: 8 }}>View PAN Card</Text>
-                        </TouchableOpacity>
-                      ) : (
-                        <TouchableOpacity
-                          style={styles.smallBtn}
-                          onPress={() => uploadPropertyDocAs('PAN')}
-                          disabled={uploadingPropertyDoc}
-                        >
-                          {uploadingPropertyDoc ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                          ) : (
-                            <>
-                              <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
-                              <Text style={{ color: '#fff', marginLeft: 8 }}>Upload PAN</Text>
-                            </>
-                          )}
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                    {/* Fallback message */}
-                    {(propertyDocs || []).length === 0 ? (
-                      <Text style={{ color: '#666', marginTop: 6 }}>No documents uploaded</Text>
-                    ) : null}
-                  </>
-                );
-              })()}
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-              <TouchableOpacity
-                style={[styles.smallBtnClose, { marginRight: 8 }]}
-                onPress={() => setShowProfileModal(false)}
-              >
-                <Text style={styles.closeText}>Close</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.smallBtn}
-                onPress={() => {
-                  setShowProfileModal(false);
-                  onLogout();
-                }}
-              >
-                <Text style={{ color: '#fff' }}>Logout</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* removed duplicate inline preview overlay to avoid duplicates; global modal below is used */}
-          </View>
-        </View>
-      </Modal>
+      {/* Owner profile is shown inline in the settings tab now. Modal removed. */}
 
       {/* Global preview modal for Aadhaar/PAN and other files (shows when handlePreview is called) */}
       <Modal visible={showPreviewModal} animationType="fade" transparent>

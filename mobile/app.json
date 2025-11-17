@@ -32,7 +32,7 @@
       "backgroundColor": "#6D28D9"
     },
     "extra": {
-      "API_BASE_URL": "192.168.1.17:4001",
+      "API_BASE_URL": "192.168.1.4:4001",
       "eas": {
         "projectId": "19573cc3-ce24-481c-b47b-1166b2a534f3"
       }

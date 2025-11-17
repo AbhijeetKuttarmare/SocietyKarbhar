@@ -23,12 +23,21 @@ import CCTVScreen from './CCTVScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import pickAndUploadProfile, { pickAndUploadFile } from '../services/uploadProfile';
 import { BottomTabContext } from '../contexts/BottomTabContext';
+import ConfirmBox from '../components/ConfirmBox';
+import SecurityGuardProfile from './SecurityGuard/SecurityGuardProfile';
+import SecurityGaurdHome from './SecurityGuard/Home';
+import SecurityGaurdScan from './SecurityGuard/Scan';
+import SecurityGaurdCCTV from './SecurityGuard/CCTV';
+import SecurityGaurdDirectory from './SecurityGuard/Directory';
+import SecurityGaurdVisitors from './SecurityGuard/Visitors';
+import SecurityGaurdProfile from './SecurityGuard/ProfileWrapper';
 type Props = { user: any; onLogout?: () => void; navigation?: any };
 
 type TabKey = 'home' | 'scan' | 'cctv' | 'directory' | 'profile' | 'visitors';
 
 export default function SecurityGuardScreen({ user, onLogout, navigation }: Props) {
   const ctx = useContext(BottomTabContext);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>((ctx && (ctx.activeKey as TabKey)) || 'home');
 
   // Home state
@@ -111,25 +120,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
               <Ionicons name="notifications-outline" size={22} color="#111" />
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={{ padding: 8 }}
-              onPress={async () => {
-                try {
-                  if (typeof onLogout === 'function') return onLogout();
-                  // fallback: clear token and try navigate to Login
-                  try {
-                    await AsyncStorage.removeItem('token');
-                  } catch (er) {}
-                  if (navigation.reset) {
-                    navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
-                  } else if (navigation.navigate) {
-                    navigation.navigate('Login');
-                  }
-                } catch (e) {
-                  notify({ type: 'error', message: 'Logout failed' });
-                }
-              }}
-            >
+            <TouchableOpacity style={{ padding: 8 }} onPress={() => setShowLogoutConfirm(true)}>
               <MaterialIcons name="logout" size={22} color="#111" />
             </TouchableOpacity>
           </View>
@@ -579,7 +570,7 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
           >
             <Ionicons name="notifications-outline" size={20} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn} onPress={onLogout}>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => setShowLogoutConfirm(true)}>
             <Ionicons name="log-out-outline" size={20} />
           </TouchableOpacity>
         </View>
@@ -588,373 +579,82 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
       {/* Content area */}
       <View style={styles.content}>
         {activeTab === 'home' && (
-          <ScrollView contentContainerStyle={{ padding: 16 }}>
-            <View>
-              <Text style={styles.title}>Home</Text>
-              <Text style={styles.timeStamp}>{now.toLocaleString()}</Text>
-            </View>
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Gate</Text>
-              <Text style={styles.cardValue}>
-                {profile?.gateName || profile?.gateId || 'Main Gate'}
-              </Text>
-            </View>
-
-            <View style={styles.row}>
-              <View style={styles.smallCard}>
-                <Text style={styles.smallTitle}>Today's Visitors</Text>
-                <Text style={styles.smallValue}>{todayCount ?? '-'}</Text>
-              </View>
-              <View style={styles.smallCard}>
-                <Text style={styles.smallTitle}>Active Inside</Text>
-                <Text style={styles.smallValue}>{insideCount ?? '-'}</Text>
-              </View>
-            </View>
-
-            <View style={{ marginTop: 12 }}>
-              <TouchableOpacity style={styles.actionButton} onPress={() => openFormLink()}>
-                <Text style={styles.actionText}>Scan Visitor QR (Open Form)</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionButton, { marginTop: 8 }]}
-                onPress={() => setActiveTab('scan')}
-              >
-                <Text style={styles.actionText}>Add New Visitor</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionButton, { marginTop: 8 }]}
-                onPress={() => setActiveTab('directory')}
-              >
-                <Text style={styles.actionText}>Flat Directory</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
+          <SecurityGaurdHome
+            now={now}
+            profile={profile}
+            todayCount={todayCount}
+            insideCount={insideCount}
+            openFormLink={openFormLink}
+            setActiveTab={(k: any) => setActiveTab(k as TabKey)}
+            styles={styles}
+          />
         )}
 
         {activeTab === 'scan' && (
-          <ScrollView contentContainerStyle={{ padding: 16 }}>
-            <Text style={styles.title}>Scan / New Visitor</Text>
-            <TouchableOpacity style={styles.actionButton} onPress={() => openFormLink()}>
-              <Text style={styles.actionText}>Scan QR (Open Form)</Text>
-            </TouchableOpacity>
-
-            <View style={{ marginTop: 16 }}>
-              <Text style={styles.label}>Visitor Name</Text>
-              <TextInput style={styles.input} value={manualName} onChangeText={setManualName} />
-              <Text style={styles.label}>Wing</Text>
-              <TouchableOpacity
-                style={[styles.input, { justifyContent: 'center' }]}
-                onPress={() => (setWingModalTarget('manual'), setShowWingModal(true))}
-              >
-                <Text>{manualWingLabel || manualWing || 'Select Wing'}</Text>
-              </TouchableOpacity>
-              <Text style={styles.label}>Flat</Text>
-              <TouchableOpacity
-                style={[styles.input, { justifyContent: 'center' }]}
-                onPress={async () => {
-                  setFlatModalTarget('manual');
-                  // ensure flats are loaded for the dropdown
-                  try {
-                    await fetchFlats(false);
-                  } catch (e) {}
-                  setShowFlatModal(true);
-                }}
-              >
-                <Text>{manualFlatLabel || manualFlat || 'Select Flat'}</Text>
-              </TouchableOpacity>
-              <Text style={styles.label}>Reason</Text>
-              <TextInput style={styles.input} value={manualReason} onChangeText={setManualReason} />
-              <Text style={styles.label}>Number of People</Text>
-              <TextInput
-                style={styles.input}
-                value={manualPeople}
-                onChangeText={setManualPeople}
-                keyboardType="number-pad"
-              />
-
-              <Text style={styles.label}>Names of Additional Visitors</Text>
-              <TextInput
-                style={[styles.input, { height: 80 }]}
-                value={additionalVisitorsNames}
-                onChangeText={setAdditionalVisitorsNames}
-                multiline
-              />
-
-              <View style={{ marginTop: 12 }}>
-                <Text style={styles.label}>Selfie</Text>
-                {selfieBase64 ? (
-                  <Image
-                    source={{ uri: selfieBase64 }}
-                    style={{ width: 120, height: 120, borderRadius: 8 }}
-                  />
-                ) : (
-                  <TouchableOpacity style={styles.cameraButton} onPress={() => pickSelfie()}>
-                    <Text style={{ color: '#fff' }}>Take Photo</Text>
-                  </TouchableOpacity>
-                )}
-                <View style={{ marginTop: 12 }}>
-                  <Text style={styles.label}>Selfies of Additional Visitors</Text>
-                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                    <TouchableOpacity
-                      style={[styles.cameraButton, { width: 120 }]}
-                      onPress={() => pickAdditionalSelfies()}
-                    >
-                      <Text style={{ color: '#fff' }}>Pick Photos</Text>
-                    </TouchableOpacity>
-                    <ScrollView horizontal>
-                      {additionalSelfies.map((s, i) => (
-                        <Image
-                          key={i}
-                          source={{ uri: s }}
-                          style={{ width: 64, height: 64, borderRadius: 6, marginLeft: 8 }}
-                        />
-                      ))}
-                    </ScrollView>
-                  </View>
-                </View>
-              </View>
-
-              <View style={{ marginTop: 16 }}>
-                <TouchableOpacity
-                  style={styles.primaryButton}
-                  onPress={() => submitManualVisitor()}
-                  disabled={submitting}
-                >
-                  {submitting ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={{ color: '#fff' }}>Submit</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-          </ScrollView>
+          <SecurityGaurdScan
+            ui={{
+              manualName,
+              setManualName,
+              manualWingLabel,
+              manualFlatLabel,
+              setShowWingModal,
+              setWingModalTarget,
+              setFlatModalTarget,
+              setShowFlatModal,
+              manualReason,
+              setManualReason,
+              manualPeople,
+              setManualPeople,
+              additionalVisitorsNames,
+              setAdditionalVisitorsNames,
+              selfieBase64,
+              pickSelfie,
+              additionalSelfies,
+              pickAdditionalSelfies,
+              submitManualVisitor,
+              submitting,
+              fetchFlats,
+              openFormLink,
+            }}
+            styles={styles}
+          />
         )}
 
         {activeTab === 'cctv' && (
-          <View style={{ flex: 1 }}>
-            <CCTVScreen
-              user={user}
-              navigation={navigation}
-              cameras={cameras}
-              loading={loadingCams}
-            />
-          </View>
+          <SecurityGaurdCCTV
+            cameras={cameras}
+            loading={loadingCams}
+            user={user}
+            navigation={navigation}
+          />
         )}
 
-        {activeTab === 'visitors' && (
-          <View style={{ flex: 1 }}>
-            <VisitorsScreen useAdminApi={false} />
-          </View>
-        )}
+        {activeTab === 'visitors' && <SecurityGaurdVisitors useAdminApi={false} />}
 
         {activeTab === 'directory' && (
-          <View style={{ flex: 1, padding: 12 }}>
-            <Text style={styles.title}>Flat Directory</Text>
-            {/* Wing chips */}
-            {wings && wings.length > 0 ? (
-              <ScrollView
-                horizontal
-                style={{ marginBottom: 8 }}
-                showsHorizontalScrollIndicator={false}
-              >
-                <TouchableOpacity
-                  style={{
-                    padding: 8,
-                    borderRadius: 8,
-                    backgroundColor: directoryWing ? '#e6f4ff' : '#fff',
-                    marginRight: 8,
-                  }}
-                  onPress={() => setDirectoryWing('')}
-                >
-                  <Text style={{ color: '#111' }}>All</Text>
-                </TouchableOpacity>
-                {wings.map((w: any) => (
-                  <TouchableOpacity
-                    key={w.id || w.key || w.name}
-                    style={{
-                      padding: 8,
-                      borderRadius: 8,
-                      backgroundColor: directoryWing === (w.name || w.label) ? '#e6f4ff' : '#fff',
-                      marginRight: 8,
-                    }}
-                    onPress={() => setDirectoryWing(w.name || w.label)}
-                  >
-                    <Text>{w.name || w.label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            ) : null}
-
-            <TextInput
-              style={styles.input}
-              placeholder="Search by flat no or name"
-              value={flatQuery}
-              onChangeText={setFlatQuery}
-            />
-
-            {loadingFlats ? (
-              <ActivityIndicator style={{ marginTop: 24 }} />
-            ) : (
-              <ScrollView contentContainerStyle={{ paddingBottom: 96 }}>
-                {(wings || [])
-                  .filter((w: any) =>
-                    directoryWing ? (w.name || w.label) === directoryWing : true
-                  )
-                  .map((wingItem: any) => {
-                    const isOpen = !!expandedWings[wingItem.id];
-                    return (
-                      <View key={wingItem.id} style={styles.wingContainer}>
-                        <TouchableOpacity
-                          style={styles.wingHeader}
-                          onPress={() =>
-                            setExpandedWings((s) => ({ ...s, [wingItem.id]: !s[wingItem.id] }))
-                          }
-                        >
-                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <Ionicons name="business" size={20} color="#374151" />
-                            <Text style={styles.wingTitle}>{wingItem.name || wingItem.label}</Text>
-                          </View>
-                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <Text style={{ color: '#6b7280', marginRight: 8 }}>
-                              {wingItem.flats ? wingItem.flats.length : 0} flats
-                            </Text>
-                            <Ionicons
-                              name={isOpen ? 'chevron-up' : 'chevron-down'}
-                              size={18}
-                              color="#6B7280"
-                            />
-                          </View>
-                        </TouchableOpacity>
-
-                        {isOpen &&
-                          (wingItem.flats || [])
-                            .filter((f: any) => {
-                              if (!flatQuery) return true;
-                              const q = String(flatQuery).toLowerCase();
-                              return (
-                                String(f.flat_no || '')
-                                  .toLowerCase()
-                                  .includes(q) ||
-                                String((f.owner && f.owner.name) || '')
-                                  .toLowerCase()
-                                  .includes(q) ||
-                                String((f.tenant && f.tenant.name) || '')
-                                  .toLowerCase()
-                                  .includes(q)
-                              );
-                            })
-                            .map((flatItem: any) => (
-                              <View
-                                key={flatItem.id || flatItem.flat_no}
-                                style={styles.flatContainer}
-                              >
-                                <View style={styles.flatHeader}>
-                                  <Ionicons name="home" size={18} color="#4B5563" />
-                                  <Text style={styles.flatTitle}>Flat {flatItem.flat_no}</Text>
-                                </View>
-
-                                <View style={styles.flatUsers}>
-                                  {(flatItem.users || []).map((u: any, ui: number) => {
-                                    const avatarUri = u?.avatar || u?.image || u?.photo || null;
-                                    const initials = (u?.name || u?.phone || '')
-                                      .split(' ')
-                                      .map((p: string) => p[0])
-                                      .join('')
-                                      .slice(0, 2)
-                                      .toUpperCase();
-                                    return (
-                                      <View
-                                        key={`${u.id || u.phone || 'u'}-${ui}`}
-                                        style={styles.userItemContainer}
-                                      >
-                                        <TouchableOpacity
-                                          style={styles.userItem}
-                                          onPress={() => {
-                                            notify({
-                                              type: 'info',
-                                              title: u?.name || 'User',
-                                              message: u?.phone || 'No phone',
-                                            });
-                                          }}
-                                        >
-                                          <View style={styles.userAvatarWrap}>
-                                            {avatarUri ? (
-                                              <Image
-                                                source={{ uri: avatarUri }}
-                                                style={styles.userAvatar}
-                                              />
-                                            ) : (
-                                              <View
-                                                style={[
-                                                  styles.userAvatar,
-                                                  styles.userAvatarFallback,
-                                                ]}
-                                              >
-                                                <Text
-                                                  style={{ color: '#374151', fontWeight: '700' }}
-                                                >
-                                                  {initials}
-                                                </Text>
-                                              </View>
-                                            )}
-                                          </View>
-
-                                          <View style={styles.userInfo}>
-                                            <Text style={styles.userName}>{u.name || u.phone}</Text>
-                                            <Text style={styles.userRole}>
-                                              {u.role || 'Resident'} • {u.phone || ''}
-                                            </Text>
-                                          </View>
-                                          <Ionicons
-                                            name="chevron-forward"
-                                            size={18}
-                                            color="#9CA3AF"
-                                          />
-                                        </TouchableOpacity>
-                                      </View>
-                                    );
-                                  })}
-                                </View>
-                              </View>
-                            ))}
-                      </View>
-                    );
-                  })}
-              </ScrollView>
-            )}
-          </View>
+          <SecurityGaurdDirectory
+            ui={{
+              wings,
+              expandedWings,
+              setExpandedWings,
+              directoryWing,
+              setDirectoryWing,
+              flatQuery,
+              setFlatQuery,
+              loadingFlats,
+              flats,
+              setShowFlatModal,
+              setFlatModalTarget,
+              setShowWingModal,
+              fetchFlats,
+              notify,
+            }}
+            styles={styles}
+          />
         )}
 
         {activeTab === 'profile' && (
-          <ScrollView contentContainerStyle={{ padding: 12 }}>
-            <Text style={styles.title}>Profile</Text>
-            <UserProfileForm
-              profile={profile || user || {}}
-              onChange={(patch: any) =>
-                setProfile((p: any) => ({ ...(p || {}), ...(patch || {}) }))
-              }
-              onEditAvatar={onEditAvatar}
-              onCall={(p: string) => {
-                try {
-                  (require('react-native').Linking as any).openURL(`tel:${p}`);
-                } catch (e) {}
-              }}
-              onSave={saveProfile}
-              documents={[]}
-              pickAndUploadFile={pickAndUploadFile}
-              saveDocumentToServer={async () => null}
-              uploadingDocId={null}
-            />
-
-            <View style={{ height: 12 }} />
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-              <TouchableOpacity style={styles.logoutBtn} onPress={onLogout}>
-                <Text style={styles.logoutText}>Logout</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={{ height: 36 }} />
-          </ScrollView>
+          <SecurityGaurdProfile user={user} onLogout={onLogout} navigation={navigation} />
         )}
       </View>
 
@@ -1161,6 +861,31 @@ export default function SecurityGuardScreen({ user, onLogout, navigation }: Prop
           active={activeTab === 'profile'}
         />
       </View>
+      <ConfirmBox
+        visible={showLogoutConfirm}
+        title="Logout"
+        message="Are you sure you want to logout?"
+        danger={true}
+        confirmLabel="Logout"
+        cancelLabel="Cancel"
+        onCancel={() => setShowLogoutConfirm(false)}
+        onConfirm={async () => {
+          setShowLogoutConfirm(false);
+          try {
+            if (typeof onLogout === 'function') return onLogout();
+            try {
+              await AsyncStorage.removeItem('token');
+            } catch (er) {}
+            if (navigation.reset) {
+              navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+            } else if (navigation.navigate) {
+              navigation.navigate('Login');
+            }
+          } catch (e) {
+            notify({ type: 'error', message: 'Logout failed' });
+          }
+        }}
+      />
     </View>
   );
 }

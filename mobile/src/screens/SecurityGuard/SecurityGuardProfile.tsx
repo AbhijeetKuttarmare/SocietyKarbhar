@@ -1,16 +1,16 @@
 import React from 'react';
-import CommonProfilePage from '../components/CommonProfilePage';
+import CommonProfilePage from '../../components/CommonProfilePage';
 
 type Props = {
   user: any;
-  onLogout: () => void;
+  onLogout?: () => void;
   navigation?: any;
   userAvatar?: string | undefined;
   setUserAvatar?: (u?: string) => void;
   setUser?: (u?: any) => void;
 };
 
-export default function AdminProfile({
+export default function SecurityGuardProfile({
   user,
   onLogout,
   navigation,
@@ -21,16 +21,18 @@ export default function AdminProfile({
   return (
     <CommonProfilePage
       user={user}
-      variant="admin"
+      variant="guard"
       onLogout={onLogout}
       navigation={navigation}
       userAvatar={userAvatar}
       setUserAvatar={setUserAvatar}
       setUser={setUser}
-      showTitle={false}
+      showTitle={true}
       showEditableForm={true}
       showAppInfo={true}
       showLogoutButton={true}
+      fetchEndpoint="/api/guard/profile"
+      title="Profile"
     />
   );
 }

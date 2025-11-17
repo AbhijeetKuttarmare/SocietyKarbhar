@@ -199,9 +199,7 @@ export default function LoginScreen({ onLogin }: Props): React.ReactElement {
               }
             })()}
             <Text style={styles.titlecentre}>Welcome back !</Text>
-            <Text style={styles.subtitle}>
-              Please confirm your country code and enter your mobile number
-            </Text>
+            <Text style={styles.subtitle}>Please Enter Your Mobile Number to Continue.</Text>
           </View>
 
           {/* When OTP is not sent, keep mobile input at bottom; when OTP is sent, show OTP panel centered */}

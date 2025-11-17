@@ -32,6 +32,7 @@ import PrivacyPolicy from './PrivacyPolicy';
 import TermsAndConditions from './TermsAndConditions';
 import styles from '../styles/superadminStyles';
 import ConfirmBox from '../components/ConfirmBox';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type Props = { user: any; onLogout: () => void };
 type Society = {
@@ -103,6 +104,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
   const [userAvatar, setUserAvatar] = useState<string | undefined>(
     (user as any)?.avatar || (user as any)?.image
   );
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   // fetch societies list
   const fetchSocieties = async () => {
@@ -255,7 +257,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
         notify({ type: 'error', message: 'Upload did not return a URL' });
         return;
       }
-      setForm((prev) => ({ ...prev, image_url: url }));
+      setForm((prev: any) => ({ ...prev, image_url: url }));
     } catch (e: any) {
       console.error('image upload failed', e);
       try {
@@ -589,7 +591,10 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 <MaterialIcons name="notifications-none" size={18} color="#111" />
               </TouchableOpacity>
               {/* removed top-right profile icon per request; profile moved to BottomTab */}
-              <TouchableOpacity style={styles.iconButton} onPress={onLogout}>
+              <TouchableOpacity
+                style={styles.iconButton}
+                onPress={() => setShowLogoutConfirm(true)}
+              >
                 <Feather name="log-out" size={16} color="#111" />
               </TouchableOpacity>
             </View>
@@ -1137,7 +1142,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 placeholder="Ex: Green Meadows Society"
                 placeholderTextColor="#9ca3af"
                 value={form.name}
-                onChangeText={(t) => setForm((p) => ({ ...p, name: t }))}
+                onChangeText={(t) => setForm((p: any) => ({ ...p, name: t }))}
                 style={styles.input}
               />
 
@@ -1153,7 +1158,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                     placeholder="Ex: +91 98765 43210"
                     placeholderTextColor="#9ca3af"
                     value={form.mobile_number}
-                    onChangeText={(t) => setForm((p) => ({ ...p, mobile_number: t }))}
+                    onChangeText={(t) => setForm((p: any) => ({ ...p, mobile_number: t }))}
                     style={styles.input}
                     keyboardType="phone-pad"
                   />
@@ -1168,7 +1173,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 placeholder="Ex: India"
                 placeholderTextColor="#9ca3af"
                 value={form.country}
-                onChangeText={(t) => setForm((p) => ({ ...p, country: t }))}
+                onChangeText={(t) => setForm((p: any) => ({ ...p, country: t }))}
                 style={styles.input}
               />
 
@@ -1180,7 +1185,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 placeholder="Ex: Pune"
                 placeholderTextColor="#9ca3af"
                 value={form.city}
-                onChangeText={(t) => setForm((p) => ({ ...p, city: t }))}
+                onChangeText={(t) => setForm((p: any) => ({ ...p, city: t }))}
                 style={styles.input}
               />
 
@@ -1192,7 +1197,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 placeholder="Ex: Wakad"
                 placeholderTextColor="#9ca3af"
                 value={form.area}
-                onChangeText={(t) => setForm((p) => ({ ...p, area: t }))}
+                onChangeText={(t) => setForm((p: any) => ({ ...p, area: t }))}
                 style={styles.input}
               />
 
@@ -1204,7 +1209,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                 placeholder="Ex: ABC Builders (optional)"
                 placeholderTextColor="#9ca3af"
                 value={form.builder_name}
-                onChangeText={(t) => setForm((p) => ({ ...p, builder_name: t }))}
+                onChangeText={(t) => setForm((p: any) => ({ ...p, builder_name: t }))}
                 style={styles.input}
               />
 
@@ -1235,7 +1240,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                           paddingHorizontal: 12,
                         },
                       ]}
-                      onPress={() => setForm((p) => ({ ...p, image_url: '' }))}
+                      onPress={() => setForm((p: any) => ({ ...p, image_url: '' }))}
                     >
                       <Text style={{ color: '#fff' }}>Remove</Text>
                     </TouchableOpacity>
@@ -1260,33 +1265,33 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
               <TextInput
                 placeholder="Name"
                 value={adminForm.name}
-                onChangeText={(t) => setAdminForm((p) => ({ ...p, name: t }))}
+                onChangeText={(t) => setAdminForm((p: any) => ({ ...p, name: t }))}
                 style={styles.input}
               />
               <TextInput
                 placeholder="Phone"
                 value={adminForm.phone}
-                onChangeText={(t) => setAdminForm((p) => ({ ...p, phone: t }))}
+                onChangeText={(t) => setAdminForm((p: any) => ({ ...p, phone: t }))}
                 style={styles.input}
                 keyboardType="phone-pad"
               />
               <TextInput
                 placeholder="Email"
                 value={adminForm.email}
-                onChangeText={(t) => setAdminForm((p) => ({ ...p, email: t }))}
+                onChangeText={(t) => setAdminForm((p: any) => ({ ...p, email: t }))}
                 style={styles.input}
                 keyboardType="email-address"
               />
               <TextInput
                 placeholder="Permanent address"
                 value={adminForm.permanent_address}
-                onChangeText={(t) => setAdminForm((p) => ({ ...p, permanent_address: t }))}
+                onChangeText={(t) => setAdminForm((p: any) => ({ ...p, permanent_address: t }))}
                 style={styles.input}
               />
               <TextInput
                 placeholder="Emergency contact number"
                 value={adminForm.emergency_contact}
-                onChangeText={(t) => setAdminForm((p) => ({ ...p, emergency_contact: t }))}
+                onChangeText={(t) => setAdminForm((p: any) => ({ ...p, emergency_contact: t }))}
                 style={styles.input}
                 keyboardType="phone-pad"
               />
@@ -1300,7 +1305,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                       const url = await pickAndUploadProfile();
                       setAdminUploading(false);
                       if (!url) return; // cancelled
-                      setAdminForm((p) => ({ ...p, avatar: url }));
+                      setAdminForm((p: any) => ({ ...p, avatar: url }));
                       // preview will show automatically
                     } catch (e: any) {
                       setAdminUploading(false);
@@ -1342,7 +1347,7 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                             paddingHorizontal: 10,
                           },
                         ]}
-                        onPress={() => setAdminForm((p) => ({ ...p, avatar: '' }))}
+                        onPress={() => setAdminForm((p: any) => ({ ...p, avatar: '' }))}
                       >
                         <Text style={{ color: '#fff' }}>Remove</Text>
                       </TouchableOpacity>
@@ -1504,7 +1509,13 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
                   >
                     <Text>Close</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.smallBtn} onPress={onLogout}>
+                  <TouchableOpacity
+                    style={styles.smallBtn}
+                    onPress={() => {
+                      setShowProfileModal(false);
+                      setShowLogoutConfirm(true);
+                    }}
+                  >
                     <Text style={{ color: '#fff' }}>Logout</Text>
                   </TouchableOpacity>
                 </View>
@@ -1512,6 +1523,26 @@ export default function SuperadminScreen({ user, onLogout }: Props) {
             </View>
           </Modal>
           {/* BottomTab is rendered at the app root (App.tsx) and synced via BottomTabContext */}
+          <ConfirmBox
+            visible={showLogoutConfirm}
+            title="Logout"
+            message="Are you sure you want to logout?"
+            danger={false}
+            confirmLabel="Logout"
+            cancelLabel="Cancel"
+            onCancel={() => setShowLogoutConfirm(false)}
+            onConfirm={async () => {
+              setShowLogoutConfirm(false);
+              try {
+                if (typeof onLogout === 'function') return onLogout();
+                try {
+                  await AsyncStorage.removeItem('token');
+                } catch (er) {}
+              } catch (e) {
+                notify({ type: 'error', message: 'Logout failed' });
+              }
+            }}
+          />
         </View>
       </View>
     </>
